@@ -1,0 +1,33 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "type": "shell",
+            "label": "build sim",
+            "command": "/usr/bin/g++",
+            "args": [
+                "-fdiagnostics-color=always",
+                "-g",
+                "${workspaceFolder}/aero.cpp",
+                "-o",
+                "${workspaceFolder}/sim",
+                "-lGLEW",
+                "-lglfw",
+                "-lGL",
+                "-lGLU",
+                "-lX11"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "detail": "Compile aero.cpp into ./sim"
+        }
+    ]
+}
