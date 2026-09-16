@@ -1,23 +1,9 @@
-#define GLM_ENABLE_EXPERIMENTAL
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtc/type_ptr.hpp>
-#include <glm/gtc/quaternion.hpp>
-#include <glm/gtx/quaternion.hpp>
 #include <vector>
 #include <iostream>
 #include <cmath>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <thread>
-#include <chrono>
-#include <fstream>
-#include <sstream>
-#include <string>
-#include <omp.h>
 using namespace glm;
 using namespace std;
 
@@ -52,7 +38,7 @@ struct Engine {
     // this runs once per frame
     void run() {
         // wipe the screen to almost-black
-        glClearColor(1.0f, 0.9f, 0.9f, 1.0f);
+        glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
         // put (0, 0) in the middle instead of the corner
@@ -70,7 +56,7 @@ struct Particle {
     vec2 pos, vel;
     vec3 col;
     int r = 10;
-    Particle(vec2 p, vec2 v, vec3 c = vec3(0, 0, 0)) : pos(p), vel(v), col(c) {}
+    Particle(vec2 p, vec2 v, vec3 c = vec3(1, 1, 1)) : pos(p), vel(v), col(c) {}
 
     void draw () {
         
