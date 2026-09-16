@@ -50,43 +50,67 @@ struct Engine {
         glLoadIdentity();
     }
 };
+Engine engine;
 
-struct Particle {
+struct Fluid {
+    int N = 100;
+    vector<float> density;
 
-    vec2 pos, vel;
-    vec3 col;
-    int r = 10;
-    Particle(vec2 p, vec2 v, vec3 c = vec3(1, 1, 1)) : pos(p), vel(v), col(c) {}
-
-    void draw () {
-        
-        glColor3f(col.r, col.b, col.g);
-        glBegin(GL_TRIANGLE_FAN);
-        glVertex2f(pos.x, pos.y);
-        for (float a = 0; a < 6.34; a+= 0.1) {
-            glVertex2f(cos(a) * r + pos.x, sin(a) * r + pos.y);
-        }
-        glEnd();
+    Fluid() {
+        density.resize(N * N);
+        for (int y = 0; y < N; y++)
+            for (int x = 0; x < N; x++)
+                density[IX(x, y)] = (float)(x + y) / (2 * N);
     }
 
+
+
+
+    int IX(int x, int y) {
+        return x + y * N;
+    }
+
+    vec3 colormap(float t) {
+        t = clamp(t, 0.0f, 1.0f);
+        vec3 c1(0, 0, 1), c2(0, 1, 1), c3(0, 1, 0), c4(1, 1, 0), c5(1, 0, 0);
+        if (t < 0.25f) return mix(c1, c2, t / 0.25f);
+        if (t < 0.5f)  return mix(c2, c3, (t - 0.25f) / 0.25f);
+        if (t < 0.75f) return mix(c3, c4, (t - 0.5f) / 0.25f);
+        return mix(c4, c5, (t - 0.75f) / 0.25f);
+    }
+
+    void draw(int screenW, int screenH) {
+        float cellW = (float)engine.WIDTH / N;
+        float cellH = (float)engine.HEIGHT / N;
+
+        for (int y = 0; y < N; y++) {
+            for (int x = 0; x < N; x++) {
+                vec3 col = colormap(density[IX(x, y)]);
+                glColor3f(col.r, col.g, col.b);
+
+                float px = x * cellW - screenW / 2.0f;
+                float py = y * cellH - screenH / 2.0f;
+
+                glBegin(GL_QUADS);
+                glVertex2f(px, py);
+                glVertex2f(px + cellW, py);
+                glVertex2f(px + cellW, py + cellH);
+                glVertex2f(px, py + cellH);
+                glEnd();
+            }
+        }
+    }
 };
-vector<Particle> particles = {
-    Particle(vec2(0, 0), vec2(0)),
-    Particle(vec2(20, 0), vec2(0)),
-    Particle(vec2(40, 0), vec2(0)),
-    Particle(vec2(60, 0), vec2(0)),
-};
+Fluid fluid;
+
 
 int main() {
-    Engine engine;
 
     // keep running until someone closes the window
     while (!glfwWindowShouldClose(engine.window)) {
         engine.run();
 
-        for (Particle p : particles ) {
-            p.draw();
-        }
+        fluid.draw(engine.WIDTH, engine.HEIGHT);
 
         glfwSwapBuffers(engine.window);
         glfwPollEvents();
