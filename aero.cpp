@@ -10,6 +10,7 @@ using namespace std;
 struct Engine {
     GLFWwindow* window;
     int WIDTH = 800, HEIGHT = 600;
+    double prev = 0.0;   // time of the previous frame
 
     Engine() {
         // wake up glfw
@@ -31,8 +32,10 @@ struct Engine {
         int fbWidth, fbHeight;
         glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
         glViewport(0, 0, fbWidth, fbHeight);
+
+        prev = glfwGetTime();
     }
-    void run() {
+    float run() {
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         glMatrixMode(GL_PROJECTION);
@@ -40,6 +43,13 @@ struct Engine {
         glOrtho(-WIDTH / 2.0, WIDTH / 2.0, -HEIGHT / 2.0, HEIGHT / 2.0, -1.0, 1.0);
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
+
+        double now = glfwGetTime();
+        float dt = (float)(now - prev);
+        prev = now;
+        
+        if (dt <= 0.0f || dt > 0.1f) dt = 1.0f / 60.0f;
+        return dt;
     }
 };
 Engine engine;
@@ -135,14 +145,17 @@ struct Fluid {
 Fluid fluid;
 
 int main () {
-    float dt = 1.0f / 60.0f;
+    
+    // init
     for (vec2& v : fluid.vel) v = vec2(0.05f, 0.0f);
     fluid.addDye();
-    while(!glfwWindowShouldClose(engine.window)) {
-        engine.run();
 
-        fluid.advect(fluid.vel, dt); 
-        fluid.advect(fluid.dye, dt); 
+    //loopty loop
+    while(!glfwWindowShouldClose(engine.window)) {
+        float dt = engine.run();
+
+        fluid.advect(fluid.vel, dt);
+        fluid.advect(fluid.dye, dt);
         fluid.draw();
 
         glfwSwapBuffers(engine.window);
