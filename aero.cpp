@@ -47,7 +47,7 @@ struct Engine {
         double now = glfwGetTime();
         float dt = (float)(now - prev);
         prev = now;
-        
+
         if (dt <= 0.0f || dt > 0.1f) dt = 1.0f / 60.0f;
         return dt;
     }
@@ -55,9 +55,9 @@ struct Engine {
 Engine engine;
 
 struct Fluid {
-    int Nx = 133, Ny=100;
-    float Lx=1.33f, Ly=1.0f, dL = 0.01f;
-
+    int Nx = 266, Ny=200;
+    float Lx=1.33f, Ly=1.0f, dL = 0.005f;
+    float nu = 1.5e-4f;
 
     vector<float> dye = vector<float>(Nx*Ny, 0.0f);
     vector<vec2>  vel = vector<vec2>(Nx*Ny, vec2(0,0));
@@ -99,9 +99,9 @@ struct Fluid {
         }
     }
     void addDye() {
-        int cx = 10;
+        int cx = Nx / 2;
         int cy = Ny / 2;
-        int radius = 5;
+        int radius = 35;
 
         for (int y = 0; y < Ny; y++) {
             for (int x = 0; x < Nx; x++) {
@@ -116,6 +116,7 @@ struct Fluid {
         }
     }
 
+    // advect velocity
     template<typename T>
     T sample(const vector<T>& f, float x, float y) {
         x = clamp(x, 0.0f, (float)Nx - 1.001f);
@@ -141,20 +142,118 @@ struct Fluid {
         }
         f = out;
     }
+    void addDye2() {
+        // Low background density everywhere
+        for (int y = 0; y < Ny; y++) {
+            for (int x = 0; x < Nx; x++) {
+                dye[x + y * Nx] = 0.15f;
+            }
+        }
+
+        // Higher-density blobs
+        for (int i = 0; i < 80; i++) {
+            int cx = rand() % Nx;
+            int cy = rand() % Ny;
+
+            int radius = 5 + rand() % 15;
+
+            for (int y = cy - radius; y <= cy + radius; y++) {
+                for (int x = cx - radius; x <= cx + radius; x++) {
+
+                    if (x < 0 || x >= Nx || y < 0 || y >= Ny)
+                        continue;
+
+                    float dx = x - cx;
+                    float dy = y - cy;
+                    float r = sqrt(dx * dx + dy * dy);
+
+                    if (r < radius) {
+                        // Strongest in the center, fades toward edge
+                        float strength = 1.0f - r / radius;
+
+                        dye[x + y * Nx] += strength * 0.6f;
+
+                        if (dye[x + y * Nx] > 1.0f)
+                            dye[x + y * Nx] = 1.0f;
+                    }
+                }
+            }
+        }
+    }
+    void addDye3() {
+    // Random baseline everywhere
+    for (int y = 0; y < Ny; y++) {
+        for (int x = 0; x < Nx; x++) {
+            dye[x + y * Nx] =
+                0.1f + (rand() / (float)RAND_MAX) * 0.15f;
+        }
+    }
+
+    // Add smooth high-density blobs
+    for (int i = 0; i < 100; i++) {
+        int cx = rand() % Nx;
+        int cy = rand() % Ny;
+        float radius = 8 + rand() % 20;
+
+        for (int y = cy - radius; y <= cy + radius; y++) {
+            for (int x = cx - radius; x <= cx + radius; x++) {
+
+                if (x < 0 || x >= Nx || y < 0 || y >= Ny)
+                    continue;
+
+                float dx = x - cx;
+                float dy = y - cy;
+                float r = sqrt(dx * dx + dy * dy);
+
+                if (r < radius) {
+                    // Smooth falloff
+                    float strength = 1.0f - r / radius;
+
+                    dye[x + y * Nx] += strength * 0.4f;
+
+                    if (dye[x + y * Nx] > 1.0f)
+                        dye[x + y * Nx] = 1.0f;
+                }
+            }
+        }
+    }
+}
+    // viscosity
+    void diffuse(float dt) {
+        vector<vec2> out = vel; 
+
+        for (int y = 1; y < Ny-1; y++) { 
+            for (int x = 1; x < Nx-1; x++) {
+                vec2 lap = (vel[(x+1) + y*Nx] + vel[(x-1) + y*Nx]
+                        + vel[x + (y+1)*Nx] + vel[x + (y-1)*Nx]
+                        - 4.0f * vel[x + y*Nx]) / (dL*dL);
+
+                out[x + y*Nx] = vel[x + y*Nx] + dt * nu * lap;
+            }
+        }
+        vel = out;
+    }
 };
 Fluid fluid;
 
 int main () {
     
     // init
-    for (vec2& v : fluid.vel) v = vec2(0.05f, 0.0f);
-    fluid.addDye();
+    for (int y = 0; y < fluid.Ny; y++)
+        for (int x = 0; x < fluid.Nx; x++) {
+            float a = (rand() / (float)RAND_MAX - 0.5f) * 1.0f;
+            float b = (rand() / (float)RAND_MAX - 0.5f) * 1.0f;
+            fluid.vel[x + y*fluid.Nx] = vec2(a, b);
+        }
+
+    fluid.addDye3();
 
     //loopty loop
     while(!glfwWindowShouldClose(engine.window)) {
         float dt = engine.run();
-
+        
         fluid.advect(fluid.vel, dt);
+        fluid.diffuse(dt);
         fluid.advect(fluid.dye, dt);
         fluid.draw();
 

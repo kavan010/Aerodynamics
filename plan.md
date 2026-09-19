@@ -1,9 +1,6 @@
-# 2D CFD Roadmap
+# 2D CFD
 
 Goal: Build a physically accurate 2D incompressible Navier-Stokes simulation.
-
-Note: 100% physical accuracy is impossible with a numerical simulation. The goal is to correctly solve the equations and verify that the solution converges.
-
 ## 1. Grid
 - Create 2D grid
 - Define physical size
