@@ -48,16 +48,16 @@ struct Fluid {
     int Nx = 133, Ny=100;
     float Lx=1.33f, Ly=1.0f, dL = 0.01f;
 
-    vector<float> dye;
-    vector<vec2> vel;
-    vector<float> p;
+
+    vector<float> dye = vector<float>(Nx*Ny, 0.0f);
+    vector<vec2>  vel = vector<vec2>(Nx*Ny, vec2(0,0));
+    vector<float> p   = vector<float>(Nx*Ny, 0.0f);
 
     Fluid (){
-        dye.resize(Nx*Ny);
-        vel.resize(Nx*Ny, vec2(0,0));
-        for (int y = 0; y < Ny; y++)
-            for (int x = 0; x < Nx; x++)
-                dye[x+y*Nx] = (float)(x + y) / (float)(Nx + Ny);
+        // // init gradient
+        // for (int y = 0; y < Ny; y++)
+        //     for (int x = 0; x < Nx; x++)
+        //         dye[x+y*Nx] = (float)(x + y) / (float)(Nx + Ny);
     }
 
     vec3 colorMap(float t) {
@@ -88,14 +88,61 @@ struct Fluid {
             }
         }
     }
+    void addDye() {
+        int cx = 10;
+        int cy = Ny / 2;
+        int radius = 5;
+
+        for (int y = 0; y < Ny; y++) {
+            for (int x = 0; x < Nx; x++) {
+
+                float dx = x - cx;
+                float dy = y - cy;
+
+                if (dx * dx + dy * dy <= radius * radius) {
+                    dye[x + y * Nx] = 1.0f;
+                }
+            }
+        }
+    }
+
+    template<typename T>
+    T sample(const vector<T>& f, float x, float y) {
+        x = clamp(x, 0.0f, (float)Nx - 1.001f);
+        y = clamp(y, 0.0f, (float)Ny - 1.001f);
+
+        int i = (int)x, j = (int)y;
+        float fx = x - i, fy = y - j;
+
+        T bottom = mix(f[i + j*Nx],     f[(i+1) + j*Nx],     fx);
+        T top    = mix(f[i + (j+1)*Nx], f[(i+1) + (j+1)*Nx], fx);
+        return mix(bottom, top, fy);
+    }
     
+    template<typename T>
+    void advect(vector<T>& f, float dt) {
+        vector<T> out(Nx*Ny);
+
+        for (int y = 0; y < Ny; y++) {
+            for (int x = 0; x < Nx; x++) {
+                vec2 v = vel[x + y*Nx];
+                out[x + y*Nx] = sample(f, x - v.x*dt/dL, y - v.y*dt/dL);
+            }
+        }
+        f = out;
+    }
 };
 Fluid fluid;
 
 int main () {
+    float dt = 1.0f / 60.0f;
+    for (vec2& v : fluid.vel) v = vec2(0.05f, 0.0f);
+    fluid.addDye();
     while(!glfwWindowShouldClose(engine.window)) {
         engine.run();
 
+        fluid.advect(fluid.vel, dt); 
+        fluid.advect(fluid.dye, dt); 
         fluid.draw();
 
         glfwSwapBuffers(engine.window);
