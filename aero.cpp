@@ -12,21 +12,19 @@ struct Engine {
     int WIDTH = 800, HEIGHT = 600;
 
     Engine() {
-        // wake up GLFW
+        // wake up glfw
         if (!glfwInit()) {
-            cerr << "glfw didn't start" << endl;
+            cerr << "glfw died lol" << endl;
             exit(EXIT_FAILURE);
         }
 
-        // ask the operating system for a window
-        window = glfwCreateWindow(WIDTH, HEIGHT, "subscribe to kavan xD", nullptr, nullptr);
+        //window
+        window = glfwCreateWindow(WIDTH, HEIGHT, "subscribe to kavan :D!", nullptr, nullptr);
         if (!window) {
-            cerr << "no window for you" << endl;
+            cerr << "no window for u lol" << endl;
             glfwTerminate();
             exit(EXIT_FAILURE);
         }
-
-        // point every future drawing command at this window
         glfwMakeContextCurrent(window);
         glewInit();
 
@@ -34,18 +32,12 @@ struct Engine {
         glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
         glViewport(0, 0, fbWidth, fbHeight);
     }
-
-    // this runs once per frame
     void run() {
-        // wipe the screen to almost-black
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-
-        // put (0, 0) in the middle instead of the corner
         glMatrixMode(GL_PROJECTION);
         glLoadIdentity();
         glOrtho(-WIDTH / 2.0, WIDTH / 2.0, -HEIGHT / 2.0, HEIGHT / 2.0, -1.0, 1.0);
-
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
     }
@@ -53,81 +45,62 @@ struct Engine {
 Engine engine;
 
 struct Fluid {
-    int N = 100;
-    vector<float> density;
-    vector<vec2> velocity;
+    int Nx = 133, Ny=100;
+    float Lx=1.33f, Ly=1.0f, dL = 0.01f;
 
-    Fluid() {
-        density.resize(N * N);
-        velocity.resize(N * N, vec2(1, 0));
-        for (int y = 0; y < N; y++)
-            for (int x = 0; x < N; x++)
-                density[x+y*N] = (float)(x+y) / (2*N);
-    }
-    int IX(int x, int y) {
-        return x + y * N;
-    }
-    vec3 colormap(float t) {
-        t = clamp(t, 0.0f, 1.0f);
-        vec3 c1(0, 0, 0), c2(0, 0, 1), c3(0, 1, 0), c4(1, 1, 0), c5(1, 0, 0);
-        if (t < 0.25f) return mix(c1, c2, t / 0.25f);
-        if (t < 0.5f)  return mix(c2, c3, (t - 0.25f) / 0.25f);
-        if (t < 0.75f) return mix(c3, c4, (t - 0.5f) / 0.25f);
-        return mix(c4, c5, (t - 0.75f) / 0.25f);
-    }
-    void draw(int screenW, int screenH) {
-        float cellW = (float)engine.WIDTH / N;
-        float cellH = (float)engine.HEIGHT / N;
+    vector<float> dye;
+    vector<vec2> vel;
+    vector<float> p;
 
-        for (int y = 0; y < N; y++) {
-            for (int x = 0; x < N; x++) {
-                vec3 col = colormap(density[IX(x, y)]);
+    Fluid (){
+        dye.resize(Nx*Ny);
+        vel.resize(Nx*Ny, vec2(0,0));
+        for (int y = 0; y < Ny; y++)
+            for (int x = 0; x < Nx; x++)
+                dye[x+y*Nx] = (float)(x + y) / (float)(Nx + Ny);
+    }
+
+    vec3 colorMap(float t) {
+        vec3 c1(0,0,0), c2(0,0,1), c3(0,1,0), c4(1,1,0), c5(1,0,0);
+        if (t < 0.25f) return mix(c1, c2, t/0.25f);
+        if (t < 0.5f) return mix(c2, c3, (t-0.25f) / 0.25f);
+        if (t < 0.75f) return mix(c3, c4, (t-0.5f) / 0.25f);
+        return mix(c4, c5, (t-0.75f) / 0.25f);
+    }
+    void draw () {
+        float cellW = (float)engine.WIDTH / Nx;
+        float cellH = (float)engine.HEIGHT / Ny;
+
+        for (int y = 0; y < Ny; y++) {
+            for (int x = 0; x < Nx; x++) {
+                vec3 col = colorMap(dye[x+y*Nx]);
                 glColor3f(col.r, col.g, col.b);
 
-                float px = x * cellW - screenW / 2.0f;
-                float py = y * cellH - screenH / 2.0f;
+                float px = x*cellW - engine.WIDTH / 2.0f;
+                float py = y*cellH - engine.HEIGHT / 2.0f;
 
                 glBegin(GL_QUADS);
                 glVertex2f(px, py);
-                glVertex2f(px + cellW, py);
-                glVertex2f(px + cellW, py + cellH);
-                glVertex2f(px, py + cellH);
+                glVertex2f(px+cellW, py);
+                glVertex2f(px+cellW, py+cellH);
+                glVertex2f(px, py+cellH);
                 glEnd();
             }
         }
     }
-    void advectDensity(float dt) {
-        vector<float> newDensity = density;
-        for (int y = 0; y < N; y++) {
-            for (int x = 0; x < N; x++) {
-                vec2 vel = velocity[IX(x, y)];
-                float srcX = x - vel.x * dt;
-                float srcY = y - vel.y * dt;
-                srcX = clamp(srcX, 0.0f, (float)N - 1);
-                srcY = clamp(srcY, 0.0f, (float)N - 1);
-                newDensity[IX(x, y)] = density[IX((int)srcX, (int)srcY)];
-            }
-        }
-        density = newDensity;
-    }
+    
 };
 Fluid fluid;
 
-
-int main() {
-
-    // keep running until someone closes the window
-    float dt = 1.0f/60.0f;
-    while (!glfwWindowShouldClose(engine.window)) {
+int main () {
+    while(!glfwWindowShouldClose(engine.window)) {
         engine.run();
-        fluid.advectDensity(dt);
 
-        fluid.draw(engine.WIDTH, engine.HEIGHT);
+        fluid.draw();
 
         glfwSwapBuffers(engine.window);
         glfwPollEvents();
     }
-
     glfwTerminate();
     return 0;
 }
