@@ -136,28 +136,31 @@ struct Fluid {
 Fluid fluid;
 
 struct Object {
-    vec2 pos; int idx, r;
-    Object(vec2 pos, int idx, int r) : pos(pos), idx(idx), r(r) {}
+    vec2 pos; int idx; float r;
+    Object(vec2 pos, int idx, float r) : pos(pos), idx(idx), r(r) {}
+    float pxPerM = engine.WIDTH / fluid.Lx;
+    vec2 c = pos * pxPerM;
+    float s = r * pxPerM;
     void draw () {
         glColor3f(1.0f, 1.0f, 1.0f);
         glBegin(GL_TRIANGLE_FAN);
         if (idx == 0) {
-            glVertex2f(pos.x, pos.y);
+            glVertex2f(c.x, c.y);
             for (float a = 0; a <= 6.3; a+=0.1) {
-                glVertex2f(pos.x + cos(a)*r, pos.y + sin(a)*r);
+                glVertex2f(c.x + cos(a)*r, c.y + sin(a)*r);
             }
         } else {
-            glVertex2f(pos.x,   pos.y);
-            glVertex2f(pos.x-r, pos.y-r);
-            glVertex2f(pos.x+r, pos.y-r);
-            glVertex2f(pos.x+r, pos.y+r);
-            glVertex2f(pos.x-r, pos.y+r);
-            glVertex2f(pos.x-r, pos.y-r);
+            glVertex2f(c.x,   c.y);
+            glVertex2f(c.x-s, c.y-s);
+            glVertex2f(c.x+s, c.y-s);
+            glVertex2f(c.x+s, c.y+s);
+            glVertex2f(c.x-s, c.y+s);
+            glVertex2f(c.x-s, c.y-s);
         }
         glEnd();
     }
 };
-Object square(vec2(0, 0), 1, 25);
+Object square(vec2(0, 0), 1, 0.1f);
 
 int main () {
 
