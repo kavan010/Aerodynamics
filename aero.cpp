@@ -159,6 +159,21 @@ struct Object {
         }
         glEnd();
     }
+    
+    bool inside(vec2 p) {
+        vec2 d = p - pos;
+        if (idx == 0) return length(d) < r;
+        return abs(d.x) < r && abs(d.y) < r;
+    }
+    void block(Fluid& f) {
+        for (int y = 0; y < f.Ny; y++) {
+            for (int x = 0; x < f.Nx; x++) {
+                vec2 cellPos = vec2((x + 0.5f) * f.dL - f.Lx / 2.0f,
+                                    (y + 0.5f) * f.dL - f.Ly / 2.0f);
+                f.vel[x + y*f.Nx] = inside(cellPos) ? vec2(0.0f) : vec2(0.5f, 0.0f);
+            }
+        }
+    }
 };
 Object square(vec2(0, 0), 1, 0.1f);
 
@@ -167,6 +182,7 @@ int main () {
     while(!glfwWindowShouldClose(engine.window)) {
         float dt = engine.run();
 
+        square.block(fluid);
         fluid.advect(fluid.dye, dt);
         fluid.inlet(dt);
         fluid.draw();
