@@ -61,11 +61,6 @@ struct Fluid {
     Fluid (){
         dye.resize(Nx*Ny);
         vel.resize(Nx*Ny, vec2(0.5f, 0.0f));
-
-        for (int y = 0; y < Ny; y++)
-            for (int x = 0; x < Nx; x++)
-                dye[x+y*Nx] = (float)(x + y) / (float)(Nx + Ny);
-
     }
 
     // ---- drawing the fluid ----
@@ -123,6 +118,20 @@ struct Fluid {
         }
         f = out;
     }
+
+    // ---- wave pulses ----
+    float t = 0.0f;
+    void inlet(float dt) {
+        t += dt;
+        float freq = 1.0f;   // waves per second
+
+        float lo = 0.05f, hi = 0.25f;   // near-black .. light blue
+        float wave = 0.5f + 0.5f * sin(2.0f * M_PI * freq * t);
+        float d = lo + (hi - lo) * wave;
+
+        for (int y = 0; y < Ny; y++)
+            dye[0 + y*Nx] = d;
+    }
 };
 Fluid fluid;
 
@@ -132,6 +141,7 @@ int main () {
         float dt = engine.run();
 
         fluid.advect(fluid.dye, dt);
+        fluid.inlet(dt);
         fluid.draw();
 
         glfwSwapBuffers(engine.window);
