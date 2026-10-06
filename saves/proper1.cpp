@@ -32,6 +32,7 @@ struct Engine {
         int fbWidth, fbHeight;
         glfwGetFramebufferSize(window, &fbWidth, &fbHeight);
         glViewport(0, 0, fbWidth, fbHeight);
+
         prev = glfwGetTime();
     }
     float run() {
@@ -42,9 +43,11 @@ struct Engine {
         glOrtho(-WIDTH / 2.0, WIDTH / 2.0, -HEIGHT / 2.0, HEIGHT / 2.0, -1.0, 1.0);
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
+
         double now = glfwGetTime();
         float dt = (float)(now - prev);
         prev = now;
+
         if (dt <= 0.0f || dt > 0.1f) dt = 1.0f / 60.0f;
         return dt;
     }
@@ -52,23 +55,15 @@ struct Engine {
 Engine engine;
 
 struct Fluid {
-    int Nx = 133, Ny=100;
-    float Lx=1.33f, Ly=1.0f, dL = 0.01f;
+    int Nx = 133, Ny=100;              // cells  
+    float Lx=1.33f, Ly=1.0f, dL=0.01f; // meters
 
-    vector<float> dye;
-    vector<vec2> vel;
+    vector<float> dye = vector<float>(Nx*Ny, 0.0f);
+    vector<vec2> vel = vector<vec2>(Nx*Ny, vec2(0,0));
+    vector<float> pressure = vector<float>(Nx*Ny, 0.0f);
 
-    Fluid (){
-        dye.resize(Nx*Ny);
-        vel.resize(Nx*Ny, vec2(0.5f, 0.0f));
+    Fluid (){ }
 
-        for (int y = 0; y < Ny; y++)
-            for (int x = 0; x < Nx; x++)
-                dye[x+y*Nx] = (float)(x + y) / (float)(Nx + Ny);
-
-    }
-
-    // ---- drawing the fluid ----
     vec3 colorMap(float t) {
         vec3 c1(0,0,0), c2(0,0,1), c3(0,1,0), c4(1,1,0), c5(1,0,0);
         if (t < 0.25f) return mix(c1, c2, t/0.25f);
@@ -98,7 +93,6 @@ struct Fluid {
         }
     }
     
-    // ---- moving the fluid ----
     template<typename T>
     T sample(const vector<T>&f, float x, float y) {
         x = clamp(x, 0.0f, (float)Nx - 1.001f);
@@ -111,6 +105,7 @@ struct Fluid {
         T top    = mix(f[i+(j+1)*Nx], f[(i+1) + (j+1)*Nx], fx);
         return mix(bottom, top, fy);
     }
+
     template<typename T>
     void advect(vector<T>& f, float dt) {
         vector<T> out(Nx*Ny);
@@ -123,14 +118,31 @@ struct Fluid {
         }
         f = out;
     }
+
+    void addDye() {
+        int cx = 10, cy = Ny / 2, radius = 5;
+        for (int y = 0; y < Ny; y++) {
+            for (int x = 0; x < Nx; x++) {
+                float dx = x - cx, dy = y - cy;
+                if (dx*dx + dy*dy <= radius*radius) {
+                    dye[x+y*Nx] = 1.0f;
+                }
+            }
+        }
+
+    }
 };
 Fluid fluid;
 
 int main () {
+    //init
+    for (vec2&v : fluid.vel) v = vec2(0.05f, 0.0f);
+    fluid.addDye();
 
     while(!glfwWindowShouldClose(engine.window)) {
         float dt = engine.run();
 
+        fluid.advect(fluid.vel, dt);
         fluid.advect(fluid.dye, dt);
         fluid.draw();
 

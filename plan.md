@@ -92,4 +92,5 @@ with:
 
 div(u) = 0
 
-Use correct physical parameters, boundary conditions, numerical methods, and validation.
+
+Basically, 3d Navier stokes fluid sim :P
