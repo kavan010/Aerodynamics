@@ -48,6 +48,14 @@ struct Engine {
         if (dt <= 0.0f || dt > 0.1f) dt = 1.0f / 60.0f;
         return dt;
     }
+    // hidden: Q / E rotate, returns radians to add this frame
+    float rotateInput(float dt) {
+        float speed = 1.5f; // rad/s
+        float a = 0.0f;
+        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) a += speed * dt;
+        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) a -= speed * dt;
+        return a;
+    }
 };
 Engine engine;
 
@@ -137,11 +145,16 @@ Fluid fluid;
 
 struct Object {
     vec2 pos; int idx; float r;
+    float angle = 0.0f; // radians
     Object(vec2 pos, int idx, float r) : pos(pos), idx(idx), r(r) {}
     float pxPerM = engine.WIDTH / fluid.Lx;
     vec2 c = pos * pxPerM;
     float s = r * pxPerM;
     void draw () {
+        glPushMatrix();
+        glTranslatef(c.x, c.y, 0.0f);
+        glRotatef(angle * 180.0f / M_PI, 0.0f, 0.0f, 1.0f);
+        glTranslatef(-c.x, -c.y, 0.0f);
         glColor3f(1.0f, 1.0f, 1.0f);
         glBegin(GL_TRIANGLE_FAN);
         if (idx == 0) {
@@ -158,10 +171,13 @@ struct Object {
             glVertex2f(c.x-s, c.y-s);
         }
         glEnd();
+        glPopMatrix();
     }
     
     bool inside(vec2 p) {
         vec2 d = p - pos;
+        d = vec2(cos(-angle)*d.x - sin(-angle)*d.y,   // rotate into the square's frame
+                 sin(-angle)*d.x + cos(-angle)*d.y);
         if (idx == 0) return length(d) < r;
         return abs(d.x) < r && abs(d.y) < r;
     }
@@ -170,7 +186,13 @@ struct Object {
             for (int x = 0; x < f.Nx; x++) {
                 vec2 cellPos = vec2((x + 0.5f) * f.dL - f.Lx / 2.0f,
                                     (y + 0.5f) * f.dL - f.Ly / 2.0f);
-                f.vel[x + y*f.Nx] = inside(cellPos) ? vec2(0.0f) : vec2(0.5f, 0.0f);
+                int i = x + y*f.Nx;
+                if (inside(cellPos)) {
+                    f.vel[i] = vec2(0.0f);
+                    f.dye[i] = 0.0f;          // no memory: solid is always empty
+                } else {
+                    f.vel[i] = vec2(0.5f, 0.0f);
+                }
             }
         }
     }
@@ -182,6 +204,7 @@ int main () {
     while(!glfwWindowShouldClose(engine.window)) {
         float dt = engine.run();
 
+        square.angle += engine.rotateInput(dt);
         square.block(fluid);
         fluid.advect(fluid.dye, dt);
         fluid.inlet(dt);
