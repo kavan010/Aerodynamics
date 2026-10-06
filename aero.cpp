@@ -135,6 +135,30 @@ struct Fluid {
 };
 Fluid fluid;
 
+struct Object {
+    vec2 pos; int idx, r;
+    Object(vec2 pos, int idx, int r) : pos(pos), idx(idx), r(r) {}
+    void draw () {
+        glColor3f(1.0f, 1.0f, 1.0f);
+        glBegin(GL_TRIANGLE_FAN);
+        if (idx == 0) {
+            glVertex2f(pos.x, pos.y);
+            for (float a = 0; a <= 6.3; a+=0.1) {
+                glVertex2f(pos.x + cos(a)*r, pos.y + sin(a)*r);
+            }
+        } else {
+            glVertex2f(pos.x,   pos.y);
+            glVertex2f(pos.x-r, pos.y-r);
+            glVertex2f(pos.x+r, pos.y-r);
+            glVertex2f(pos.x+r, pos.y+r);
+            glVertex2f(pos.x-r, pos.y+r);
+            glVertex2f(pos.x-r, pos.y-r);
+        }
+        glEnd();
+    }
+};
+Object square(vec2(0, 0), 1, 25);
+
 int main () {
 
     while(!glfwWindowShouldClose(engine.window)) {
@@ -143,6 +167,8 @@ int main () {
         fluid.advect(fluid.dye, dt);
         fluid.inlet(dt);
         fluid.draw();
+
+        square.draw();
 
         glfwSwapBuffers(engine.window);
         glfwPollEvents();
