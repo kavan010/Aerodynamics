@@ -7,6 +7,7 @@
 using namespace glm;
 using namespace std;
 
+// --- Twin-Turbo 5.2L V10 ----
 struct Engine {
     GLFWwindow* window;
     int WIDTH = 800, HEIGHT = 600;
@@ -61,14 +62,22 @@ Engine engine;
 
 struct Fluid {
     int Nx = 133, Ny=100;
-    float Lx=1.33f, Ly=1.0f, dL = 0.01f;
+    float dL = 0.01f, dt = 1.f/60.f;
+    float maxVal = 1.0f;
+    //     air density, viscosity, inlet wind speed
+    float rho = 1.2f, nu = 1.5e-5f, Uin = 1.0f; 
 
-    vector<float> dye;
-    vector<vec2> vel;
+    vector<float> u, v;
+    vector<bool> solid;
+    int U(int i, int j) { return i + j*(Nx+1); }
+    int V(int i, int j) { return i + j*Nx; }
 
     Fluid (){
-        dye.resize(Nx*Ny);
-        vel.resize(Nx*Ny, vec2(0.5f, 0.0f));
+        u.resize((Nx+1)*Ny, 1.0f);
+        v.resize(Nx*(Ny+1), 0.0f);
+        solid.resize(Nx*Ny, false);
+                for (float& x : u) x = 0.5f;
+        for (int j = 40; j < 60; j++) for (int i = 10; i < 30; i++) v[V(i,j)] = 0.5f;
     }
 
     // ---- drawing the fluid ----
@@ -85,7 +94,10 @@ struct Fluid {
 
         for (int y = 0; y < Ny; y++) {
             for (int x = 0; x < Nx; x++) {
-                vec3 col = colorMap(dye[x+y*Nx]);
+                float val = solid[x+y*Nx] ? 0.0f : 
+                length(vec2(u[U(x,y)]+u[U(x+1,y)], v[V(x,y)]+v[V(x,y+1)]) * 0.5f);
+
+                vec3 col = colorMap(clamp(val / maxVal, 0.0f, 1.0f));
                 glColor3f(col.r, col.g, col.b);
 
                 float px = x*cellW - engine.WIDTH / 2.0f;
@@ -102,74 +114,70 @@ struct Fluid {
     }
     
     // ---- moving the fluid ----
-    template<typename T>
-    T sample(const vector<T>&f, float x, float y) {
-        x = clamp(x, 0.0f, (float)Nx - 1.001f);
-        y = clamp(y, 0.0f, (float)Ny - 1.001f);
-
+    void boundaries() {
+        for (int j = 0; j < Ny; j++) {
+            u[U(0,j)]  = Uin;            // inlet
+            u[U(Nx,j)] = u[U(Nx-1,j)];   // outlet
+        }
+        for (int i = 0; i < Nx; i++) {
+            v[V(i,0)]  = 0.0f;           // bottom wall
+            v[V(i,Ny)] = 0.0f;           // top wall
+        }
+        for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++) {
+            if (!solid[i + j*Nx]) continue;
+            u[U(i,j)] = u[U(i+1,j)] = 0.0f; // left and right faces of the solid cell
+            v[V(i,j)] = v[V(i,j+1)] = 0.0f; // bottom and top faces
+        }
+    }
+    float sample(const vector<float>& f, int w, int h, float x, float y) {
+        x = clamp(x, 0.0f, w - 1.001f);
+        y = clamp(y, 0.0f, h - 1.001f);
         int i = (int)x, j = (int)y;
         float fx = x - i, fy = y - j;
-
-        T bottom = mix(f[i + j*Nx],   f[(i+1) + j*Nx], fx);
-        T top    = mix(f[i+(j+1)*Nx], f[(i+1) + (j+1)*Nx], fx);
+        float bottom = mix(f[i + j*w],     f[(i+1) + j*w],     fx);
+        float top    = mix(f[i + (j+1)*w], f[(i+1) + (j+1)*w], fx);
         return mix(bottom, top, fy);
     }
-    template<typename T>
-    void advect(vector<T>& f, float dt) {
-        vector<T> out(Nx*Ny);
-
-        for (int y = 0; y < Ny; y++) {
-            for (int x = 0; x < Nx; x++) {
-                vec2 v = vel[x+y*Nx];
-                out[x+y*Nx] = sample(f, x - v.x*dt/dL, y-v.y*dt/dL);
-            }
+    void advect() {
+        vector<float> nu = u, nv = v;
+        float k = dt / dL; // m/s -> cells per step
+        for (int j = 0; j < Ny; j++) for (int i = 0; i <= Nx; i++) {   // u faces, at (i, j+0.5)
+            float vx = u[U(i,j)];                                       // u is stored here
+            float vy = sample(v, Nx, Ny+1, i - 0.5f, j + 0.5f);         // v interpolated here
+            nu[U(i,j)] = sample(u, Nx+1, Ny, i - vx*k, j - vy*k);       // u at the backtraced point
         }
-        f = out;
-    }
-
-    // ---- wave pulses ----
-    float t = 0.0f;
-    void inlet(float dt) {
-        t += dt;
-        float freq = 1.0f;   // waves per second
-
-        float lo = 0.05f, hi = 0.25f;   // near-black .. light blue
-        float wave = 0.5f + 0.5f * sin(2.0f * M_PI * freq * t);
-        float d = lo + (hi - lo) * wave;
-
-        for (int y = 0; y < Ny; y++)
-            dye[0 + y*Nx] = d;
+        for (int j = 0; j <= Ny; j++) for (int i = 0; i < Nx; i++) {   // v faces, at (i+0.5, j)
+            float vx = sample(u, Nx+1, Ny, i + 0.5f, j - 0.5f);         // u interpolated here
+            float vy = v[V(i,j)];                                       // v is stored here
+            nv[V(i,j)] = sample(v, Nx, Ny+1, i - vx*k, j - vy*k);       // v at the backtraced point
+        }
+        u = nu; v = nv;
     }
 };
 Fluid fluid;
 
 struct Object {
-    vec2 pos; int idx; float r;
+    vec2 pos; float r;
     float angle = 0.0f; // radians
-    Object(vec2 pos, int idx, float r) : pos(pos), idx(idx), r(r) {}
-    float pxPerM = engine.WIDTH / fluid.Lx;
-    vec2 c = pos * pxPerM;
-    float s = r * pxPerM;
+    Object(vec2 pos, float r) : pos(pos), r(r) {}
+
     void draw () {
+        float pxPerM = engine.WIDTH / (fluid.Nx * fluid.dL);
+        vec2 c = pos * pxPerM;
+        float s = r * pxPerM;
+
         glPushMatrix();
         glTranslatef(c.x, c.y, 0.0f);
         glRotatef(angle * 180.0f / M_PI, 0.0f, 0.0f, 1.0f);
         glTranslatef(-c.x, -c.y, 0.0f);
         glColor3f(1.0f, 1.0f, 1.0f);
         glBegin(GL_TRIANGLE_FAN);
-        if (idx == 0) {
-            glVertex2f(c.x, c.y);
-            for (float a = 0; a <= 6.3; a+=0.1) {
-                glVertex2f(c.x + cos(a)*r, c.y + sin(a)*r);
-            }
-        } else {
-            glVertex2f(c.x,   c.y);
-            glVertex2f(c.x-s, c.y-s);
-            glVertex2f(c.x+s, c.y-s);
-            glVertex2f(c.x+s, c.y+s);
-            glVertex2f(c.x-s, c.y+s);
-            glVertex2f(c.x-s, c.y-s);
-        }
+        glVertex2f(c.x,   c.y);
+        glVertex2f(c.x-s, c.y-s);
+        glVertex2f(c.x+s, c.y-s);
+        glVertex2f(c.x+s, c.y+s);
+        glVertex2f(c.x-s, c.y+s);
+        glVertex2f(c.x-s, c.y-s);
         glEnd();
         glPopMatrix();
     }
@@ -178,38 +186,34 @@ struct Object {
         vec2 d = p - pos;
         d = vec2(cos(-angle)*d.x - sin(-angle)*d.y,   // rotate into the square's frame
                  sin(-angle)*d.x + cos(-angle)*d.y);
-        if (idx == 0) return length(d) < r;
         return abs(d.x) < r && abs(d.y) < r;
     }
     void block(Fluid& f) {
         for (int y = 0; y < f.Ny; y++) {
             for (int x = 0; x < f.Nx; x++) {
-                vec2 cellPos = vec2((x + 0.5f) * f.dL - f.Lx / 2.0f,
-                                    (y + 0.5f) * f.dL - f.Ly / 2.0f);
+                vec2 cellPos = vec2((x + 0.5f) * f.dL - (f.Nx * f.dL) / 2.0f,
+                                    (y + 0.5f) * f.dL - (f.Ny * f.dL) / 2.0f);
                 int i = x + y*f.Nx;
-                if (inside(cellPos)) {
-                    f.vel[i] = vec2(0.0f);
-                    f.dye[i] = 0.0f;          // no memory: solid is always empty
-                } else {
-                    f.vel[i] = vec2(0.5f, 0.0f);
-                }
+                f.solid[i] = inside(cellPos);
             }
         }
     }
 };
-Object square(vec2(0, 0), 1, 0.1f);
+Object square(vec2(0.0f), 0.1f);
 
 int main () {
 
     while(!glfwWindowShouldClose(engine.window)) {
-        float dt = engine.run();
+        float frameDt = engine.run();
+        square.angle += engine.rotateInput(frameDt);
 
-        square.angle += engine.rotateInput(dt);
+        // --- physiques ---
         square.block(fluid);
-        fluid.advect(fluid.dye, dt);
-        fluid.inlet(dt);
-        fluid.draw();
+        fluid.advect();
+        fluid.boundaries();
 
+        // --- draw ---
+        fluid.draw();
         square.draw();
 
         glfwSwapBuffers(engine.window);
@@ -218,3 +222,4 @@ int main () {
     glfwTerminate();
     return 0;
 }
+
