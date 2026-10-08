@@ -67,7 +67,7 @@ struct Fluid {
     //     air density, viscosity, inlet wind speed
     float rho = 1.2f, nu = 1.5e-5f, Uin = 1.0f; 
 
-    vector<float> u, v;
+    vector<float> u, v, p;
     vector<bool> solid;
     int U(int i, int j) { return i + j*(Nx+1); }
     int V(int i, int j) { return i + j*Nx; }
@@ -75,9 +75,9 @@ struct Fluid {
     Fluid (){
         u.resize((Nx+1)*Ny, 1.0f);
         v.resize(Nx*(Ny+1), 0.0f);
+        p.resize(Nx*Ny, 0.0f);
         solid.resize(Nx*Ny, false);
-                for (float& x : u) x = 0.5f;
-        for (int j = 40; j < 60; j++) for (int i = 10; i < 30; i++) v[V(i,j)] = 0.5f;
+        for (float& x : u) x = 0.5f;
     }
 
     // ---- drawing the fluid ----
@@ -94,7 +94,7 @@ struct Fluid {
 
         for (int y = 0; y < Ny; y++) {
             for (int x = 0; x < Nx; x++) {
-                float val = solid[x+y*Nx] ? 0.0f : 
+                float val = length(vec2(u[U(x,y)]+u[U(x+1,y)], v[V(x,y)]+v[V(x,y+1)]) * 0.5f);
                 length(vec2(u[U(x,y)]+u[U(x+1,y)], v[V(x,y)]+v[V(x,y+1)]) * 0.5f);
 
                 vec3 col = colorMap(clamp(val / maxVal, 0.0f, 1.0f));
@@ -153,6 +153,34 @@ struct Fluid {
         }
         u = nu; v = nv;
     }
+    void project() {
+        for (int j = 0; j < Ny; j++) u[U(0,j)] = u[U(Nx,j)] = 0.0f; // left/right walls
+        for (int i = 0; i < Nx; i++) v[V(i,0)] = v[V(i,Ny)] = 0.0f; // bottom/top walls
+
+        vector<float> div(Nx*Ny);
+        for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++)
+            div[i+j*Nx] = (u[U(i+1,j)] - u[U(i,j)] + v[V(i,j+1)] - v[V(i,j)]) / dL;
+
+        float s = rho * dL*dL / dt;
+        for (int it = 0; it < 100; it++)
+            for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++) {
+                float sum = 0.0f; int n = 0;
+                if (i > 0)    { sum += p[(i-1)+j*Nx]; n++; }
+                if (i < Nx-1) { sum += p[(i+1)+j*Nx]; n++; }
+                if (j > 0)    { sum += p[i+(j-1)*Nx]; n++; }
+                if (j < Ny-1) { sum += p[i+(j+1)*Nx]; n++; }
+                p[i+j*Nx] = mix(p[i+j*Nx], (sum - s*div[i+j*Nx]) / n, 1.9f);
+            }
+
+        float k = dt / (rho * dL);
+        for (int j = 0; j < Ny; j++) for (int i = 1; i < Nx; i++)
+            u[U(i,j)] -= k * (p[i+j*Nx] - p[(i-1)+j*Nx]);
+        for (int j = 1; j < Ny; j++) for (int i = 0; i < Nx; i++)
+            v[V(i,j)] -= k * (p[i+j*Nx] - p[i+(j-1)*Nx]);
+    }
+    void jet() {
+        for (int j = 48; j < 52; j++) for (int i = 1; i < 3; i++) u[U(i,j)] = 5.0f;
+    }
 };
 Fluid fluid;
 
@@ -208,8 +236,10 @@ int main () {
         square.angle += engine.rotateInput(frameDt);
 
         // --- physiques ---
+        fluid.jet();
         square.block(fluid);
         fluid.advect();
+        fluid.project();
         fluid.boundaries();
 
         // --- draw ---
