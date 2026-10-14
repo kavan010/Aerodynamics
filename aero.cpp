@@ -63,7 +63,7 @@ Engine engine;
 struct Fluid {
     int Nx = 133, Ny=100;
     float dL = 0.01f, dt = 1.f/60.f;
-    float maxVal = 1.0f;
+    float maxVal = 5.0f;
     //     air density, viscosity, inlet wind speed
     float rho = 1.2f, nu = 1.5e-5f, Uin = 1.0f; 
 
@@ -154,30 +154,40 @@ struct Fluid {
         u = nu; v = nv;
     }
     void project() {
-        for (int j = 0; j < Ny; j++) u[U(0,j)] = u[U(Nx,j)] = 0.0f; // left/right walls
-        for (int i = 0; i < Nx; i++) v[V(i,0)] = v[V(i,Ny)] = 0.0f; // bottom/top walls
-
-        vector<float> div(Nx*Ny);
+        vector<float> div(Nx*Ny, 0.0f);
         for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++)
-            div[i+j*Nx] = (u[U(i+1,j)] - u[U(i,j)] + v[V(i,j+1)] - v[V(i,j)]) / dL;
+            if (!solid[i+j*Nx]) div[i+j*Nx] = (u[U(i+1,j)] - u[U(i,j)] + v[V(i,j+1)] - v[V(i,j)]) / dL;
 
         float s = rho * dL*dL / dt;
         for (int it = 0; it < 100; it++)
             for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++) {
+                if (solid[i+j*Nx]) continue;
                 float sum = 0.0f; int n = 0;
-                if (i > 0)    { sum += p[(i-1)+j*Nx]; n++; }
-                if (i < Nx-1) { sum += p[(i+1)+j*Nx]; n++; }
-                if (j > 0)    { sum += p[i+(j-1)*Nx]; n++; }
-                if (j < Ny-1) { sum += p[i+(j+1)*Nx]; n++; }
-                p[i+j*Nx] = mix(p[i+j*Nx], (sum - s*div[i+j*Nx]) / n, 1.9f);
+                if (i > 0    && !solid[(i-1)+j*Nx]) { sum += p[(i-1)+j*Nx]; n++; }
+                if (i < Nx-1) { if (!solid[(i+1)+j*Nx]) { sum += p[(i+1)+j*Nx]; n++; } }
+                else n++;                                   // outlet ghost cell, p = 0
+                if (j > 0    && !solid[i+(j-1)*Nx]) { sum += p[i+(j-1)*Nx]; n++; }
+                if (j < Ny-1 && !solid[i+(j+1)*Nx]) { sum += p[i+(j+1)*Nx]; n++; }
+                if (n) p[i+j*Nx] = mix(p[i+j*Nx], (sum - s*div[i+j*Nx]) / n, 1.9f);
             }
 
         float k = dt / (rho * dL);
         for (int j = 0; j < Ny; j++) for (int i = 1; i < Nx; i++)
-            u[U(i,j)] -= k * (p[i+j*Nx] - p[(i-1)+j*Nx]);
+            if (!solid[i+j*Nx] && !solid[(i-1)+j*Nx]) u[U(i,j)] -= k * (p[i+j*Nx] - p[(i-1)+j*Nx]);
+        for (int j = 0; j < Ny; j++)
+            if (!solid[(Nx-1)+j*Nx]) u[U(Nx,j)] -= k * (0.0f - p[(Nx-1)+j*Nx]);   // outlet face
         for (int j = 1; j < Ny; j++) for (int i = 0; i < Nx; i++)
-            v[V(i,j)] -= k * (p[i+j*Nx] - p[i+(j-1)*Nx]);
+            if (!solid[i+j*Nx] && !solid[i+(j-1)*Nx]) v[V(i,j)] -= k * (p[i+j*Nx] - p[i+(j-1)*Nx]);
     }
+    void diffuse() {
+        vector<float> u0 = u, v0 = v;
+        float a = nu * dt / (dL*dL);   // must be < 0.25 or it blows up
+        for (int j = 1; j < Ny-1; j++) for (int i = 1; i < Nx; i++)
+            u[U(i,j)] = u0[U(i,j)] + a * (u0[U(i+1,j)] + u0[U(i-1,j)] + u0[U(i,j+1)] + u0[U(i,j-1)] - 4*u0[U(i,j)]);
+        for (int j = 1; j < Ny; j++) for (int i = 1; i < Nx-1; i++)
+            v[V(i,j)] = v0[V(i,j)] + a * (v0[V(i+1,j)] + v0[V(i-1,j)] + v0[V(i,j+1)] + v0[V(i,j-1)] - 4*v0[V(i,j)]);
+    }
+
     void jet() {
         for (int j = 48; j < 52; j++) for (int i = 1; i < 3; i++) u[U(i,j)] = 5.0f;
     }
@@ -236,11 +246,14 @@ int main () {
         square.angle += engine.rotateInput(frameDt);
 
         // --- physiques ---
-        fluid.jet();
         square.block(fluid);
-        fluid.advect();
-        fluid.project();
+        fluid.jet();
         fluid.boundaries();
+        fluid.advect();
+        fluid.diffuse();      // step 2
+        fluid.boundaries();
+        fluid.project();
+
 
         // --- draw ---
         fluid.draw();
