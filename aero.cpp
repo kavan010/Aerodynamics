@@ -61,11 +61,11 @@ struct Engine {
 Engine engine;
 
 struct Fluid {
-    int Nx = 133, Ny=100;
-    float dL = 0.01f, dt = 1.f/60.f;
-    float maxVal = 5.0f;
+    int Nx = 266, Ny=200;
+    float dL = 0.005f, dt = 1.f/60.f;
+    float maxVal = 2.5f;
     //     air density, viscosity, inlet wind speed
-    float rho = 1.2f, nu = 1.5e-5f, Uin = 1.0f; 
+    float rho = 1.2f, nu = 1.5e-5f, Uin = 5.0f; 
 
     vector<float> u, v, p;
     vector<bool> solid;
@@ -80,13 +80,14 @@ struct Fluid {
         for (float& x : u) x = 0.5f;
     }
 
-    // ---- drawing the fluid ----
+    // ---- drawing ----
     vec3 colorMap(float t) {
+        float s1 = 0.35f, s2 = 0.55f, s3 = 0.6f, s4 = 0.8f;
         vec3 c1(0,0,0), c2(0,0,1), c3(0,1,0), c4(1,1,0), c5(1,0,0);
-        if (t < 0.25f) return mix(c1, c2, t/0.25f);
-        if (t < 0.5f) return mix(c2, c3, (t-0.25f) / 0.25f);
-        if (t < 0.75f) return mix(c3, c4, (t-0.5f) / 0.25f);
-        return mix(c4, c5, (t-0.75f) / 0.25f);
+        if (t < s1) return mix(c1, c2, t / s1);
+        if (t < s2) return mix(c2, c3, (t-s1) / (s2-s1));
+        if (t < s3) return mix(c3, c4, (t-s2) / (s3-s2));
+        return mix(c4, c5, std::min((t-s3) / (s4-s3), 1.0f));
     }
     void draw () {
         float cellW = (float)engine.WIDTH / Nx;
@@ -97,7 +98,7 @@ struct Fluid {
                 float val = length(vec2(u[U(x,y)]+u[U(x+1,y)], v[V(x,y)]+v[V(x,y+1)]) * 0.5f);
                 length(vec2(u[U(x,y)]+u[U(x+1,y)], v[V(x,y)]+v[V(x,y+1)]) * 0.5f);
 
-                vec3 col = colorMap(clamp(val / maxVal, 0.0f, 1.0f));
+                vec3 col = colorMap(clamp(val / (maxVal * Uin), 0.0f, 1.0f));
                 glColor3f(col.r, col.g, col.b);
 
                 float px = x*cellW - engine.WIDTH / 2.0f;
@@ -181,15 +182,18 @@ struct Fluid {
     }
     void diffuse() {
         vector<float> u0 = u, v0 = v;
-        float a = nu * dt / (dL*dL);   // must be < 0.25 or it blows up
+        float a = nu * dt / (dL*dL);
         for (int j = 1; j < Ny-1; j++) for (int i = 1; i < Nx; i++)
-            u[U(i,j)] = u0[U(i,j)] + a * (u0[U(i+1,j)] + u0[U(i-1,j)] + u0[U(i,j+1)] + u0[U(i,j-1)] - 4*u0[U(i,j)]);
+            u[U(i,j)] = u0[U(i,j)] + a * (u0[U(i+1,j)] + u0[U(i-1,j)] + v0[V(i,j+1)] + u0[U(i,j-1)] - 4*u0[U(i,j)]);
         for (int j = 1; j < Ny; j++) for (int i = 1; i < Nx-1; i++)
             v[V(i,j)] = v0[V(i,j)] + a * (v0[V(i+1,j)] + v0[V(i-1,j)] + v0[V(i,j+1)] + v0[V(i,j-1)] - 4*v0[V(i,j)]);
     }
 
     void jet() {
-        for (int j = 48; j < 52; j++) for (int i = 1; i < 3; i++) u[U(i,j)] = 5.0f;
+        for (int j = 0; j < Ny; j++) {
+            float y = (j + 0.5f) * dL - Ny * dL / 2.0f;     // metres from centre
+            if (abs(y) < 0.02f) for (int i = 1; i < 3; i++) u[U(i,j)] = 5.0f;
+        }
     }
 };
 Fluid fluid;
@@ -237,7 +241,7 @@ struct Object {
         }
     }
 };
-Object square(vec2(0.0f), 0.1f);
+Object square(vec2(0.0f), 0.05f);
 
 int main () {
 
@@ -246,14 +250,12 @@ int main () {
         square.angle += engine.rotateInput(frameDt);
 
         // --- physiques ---
-        square.block(fluid);
         fluid.jet();
-        fluid.boundaries();
+        square.block(fluid);
         fluid.advect();
-        fluid.diffuse();      // step 2
-        fluid.boundaries();
         fluid.project();
-
+        fluid.diffuse();
+        fluid.boundaries();
 
         // --- draw ---
         fluid.draw();
