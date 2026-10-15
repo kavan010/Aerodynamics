@@ -4,6 +4,7 @@
 #include <vector>
 #include <iostream>
 #include <cmath>
+#include <algorithm>
 using namespace glm;
 using namespace std;
 
@@ -36,6 +37,8 @@ struct Engine {
         prev = glfwGetTime();
     }
     float run() {
+        glfwSwapBuffers(window);
+        glfwPollEvents();
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
         glMatrixMode(GL_PROJECTION);
@@ -49,23 +52,28 @@ struct Engine {
         if (dt <= 0.0f || dt > 0.1f) dt = 1.0f / 60.0f;
         return dt;
     }
-    // hidden: Q / E rotate, returns radians to add this frame
-    float rotateInput(float dt) {
-        float speed = 1.5f; // rad/s
-        float a = 0.0f;
-        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) a += speed * dt;
-        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) a -= speed * dt;
-        return a;
+    // Q / E: spin rate in rad/s
+    float spin() {
+        return 1.5f * ((glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) - (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS));
     }
+
+    // Q / E: spin rate in rad/s
+    float rotateInput() {
+        float speed = 1.5f;
+        if (glfwGetKey(window, GLFW_KEY_Q) == GLFW_PRESS) return  speed;
+        if (glfwGetKey(window, GLFW_KEY_E) == GLFW_PRESS) return -speed;
+        return 0.0f;
+    }
+
 };
 Engine engine;
 
 struct Fluid {
     int Nx = 266, Ny=200;
-    float dL = 0.005f, dt = 1.f/60.f;
-    float maxVal = 2.5f;
+    float dL = 0.005f, dt = 1.f/60.f, cfl = 3.0f;
+    float maxVal = 2.2f;
     //     air density, viscosity, inlet wind speed
-    float rho = 1.2f, nu = 1.5e-5f, Uin = 5.0f; 
+    float rho = 1.2f, nu = 1.5e-5f, Uin = 3.0f; 
 
     vector<float> u, v, p;
     vector<bool> solid;
@@ -96,9 +104,7 @@ struct Fluid {
         for (int y = 0; y < Ny; y++) {
             for (int x = 0; x < Nx; x++) {
                 float val = length(vec2(u[U(x,y)]+u[U(x+1,y)], v[V(x,y)]+v[V(x,y+1)]) * 0.5f);
-                length(vec2(u[U(x,y)]+u[U(x+1,y)], v[V(x,y)]+v[V(x,y+1)]) * 0.5f);
-
-                vec3 col = colorMap(clamp(val / (maxVal * Uin), 0.0f, 1.0f));
+                vec3 col = colorMap(glm::clamp(val / (maxVal * Uin), 0.0f, 1.0f));
                 glColor3f(col.r, col.g, col.b);
 
                 float px = x*cellW - engine.WIDTH / 2.0f;
@@ -115,44 +121,53 @@ struct Fluid {
     }
     
     // ---- moving the fluid ----
-    void boundaries() {
+    void boundaries(vec2 c = vec2(0), float omega = 0.0f) {
+        float x0 = Nx*dL/2, y0 = Ny*dL/2;
         for (int j = 0; j < Ny; j++) {
-            u[U(0,j)]  = Uin;            // inlet
-            u[U(Nx,j)] = u[U(Nx-1,j)];   // outlet
+            u[U(0,j)]  = Uin;          
+            u[U(Nx,j)] = u[U(Nx-1,j)];
         }
-        for (int i = 0; i < Nx; i++) {
-            v[V(i,0)]  = 0.0f;           // bottom wall
-            v[V(i,Ny)] = 0.0f;           // top wall
-        }
+        for (int i = 0; i < Nx; i++) v[V(i,0)] = v[V(i,Ny)] = 0.0f;
         for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++) {
             if (!solid[i + j*Nx]) continue;
-            u[U(i,j)] = u[U(i+1,j)] = 0.0f; // left and right faces of the solid cell
-            v[V(i,j)] = v[V(i,j+1)] = 0.0f; // bottom and top faces
+            float us = -omega * ((j + 0.5f)*dL - y0 - c.y);
+            float vs =  omega * ((i + 0.5f)*dL - x0 - c.x);
+            u[U(i,j)] = u[U(i+1,j)] = us;
+            v[V(i,j)] = v[V(i,j+1)] = vs;
         }
     }
-    float sample(const vector<float>& f, int w, int h, float x, float y) {
-        x = clamp(x, 0.0f, w - 1.001f);
-        y = clamp(y, 0.0f, h - 1.001f);
+
+    float sample(const vector<float>& f, int w, int h, float x, float y, float* lo = nullptr, float* hi = nullptr) {
+        x = glm::clamp(x, 0.0f, w - 1.001f);
+        y = glm::clamp(y, 0.0f, h - 1.001f);
         int i = (int)x, j = (int)y;
         float fx = x - i, fy = y - j;
-        float bottom = mix(f[i + j*w],     f[(i+1) + j*w],     fx);
-        float top    = mix(f[i + (j+1)*w], f[(i+1) + (j+1)*w], fx);
-        return mix(bottom, top, fy);
+        float a = f[i + j*w], b = f[(i+1) + j*w], c = f[i + (j+1)*w], d = f[(i+1) + (j+1)*w];
+        if (lo) { *lo = std::min({a, b, c, d}); *hi = std::max({a, b, c, d}); }
+        return mix(mix(a, b, fx), mix(c, d, fx), fy);
+    }
+    void trace(const vector<float>& f, vector<float>& out, bool isU, float k, vector<float>* lo = nullptr, vector<float>* hi = nullptr) {
+        int w = isU ? Nx+1 : Nx, h = isU ? Ny : Ny+1;
+        for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) {
+            int n = i + j*w;                                                   // same as U(i,j) / V(i,j)
+            float vx = isU ? u[n] : sample(u, Nx+1, Ny, i + 0.5f, j - 0.5f);
+            float vy = isU ? sample(v, Nx, Ny+1, i - 0.5f, j + 0.5f) : v[n];
+            out[n] = sample(f, w, h, i - vx*k, j - vy*k, lo ? &(*lo)[n] : nullptr, hi ? &(*hi)[n] : nullptr);
+        }
     }
     void advect() {
-        vector<float> nu = u, nv = v;
-        float k = dt / dL; // m/s -> cells per step
-        for (int j = 0; j < Ny; j++) for (int i = 0; i <= Nx; i++) {   // u faces, at (i, j+0.5)
-            float vx = u[U(i,j)];                                       // u is stored here
-            float vy = sample(v, Nx, Ny+1, i - 0.5f, j + 0.5f);         // v interpolated here
-            nu[U(i,j)] = sample(u, Nx+1, Ny, i - vx*k, j - vy*k);       // u at the backtraced point
+        float k = dt / dL;
+        vector<float> res[2];
+        for (int c = 0; c < 2; c++) {
+            const vector<float>& f = c ? v : u;
+            vector<float> f1 = f, f2 = f, lo = f, hi = f;
+            trace(f, f1, !c, k, &lo, &hi);             
+            trace(f1, f2, !c, -k);                     
+            for (size_t n = 0; n < f.size(); n++)       
+                f2[n] = glm::clamp(f1[n] + 0.5f*(f[n] - f2[n]), lo[n], hi[n]);
+            res[c] = f2;
         }
-        for (int j = 0; j <= Ny; j++) for (int i = 0; i < Nx; i++) {   // v faces, at (i+0.5, j)
-            float vx = sample(u, Nx+1, Ny, i + 0.5f, j - 0.5f);         // u interpolated here
-            float vy = v[V(i,j)];                                       // v is stored here
-            nv[V(i,j)] = sample(v, Nx, Ny+1, i - vx*k, j - vy*k);       // v at the backtraced point
-        }
-        u = nu; v = nv;
+        u = res[0]; v = res[1];                        
     }
     void project() {
         vector<float> div(Nx*Ny, 0.0f);
@@ -183,24 +198,33 @@ struct Fluid {
     void diffuse() {
         vector<float> u0 = u, v0 = v;
         float a = nu * dt / (dL*dL);
-        for (int j = 1; j < Ny-1; j++) for (int i = 1; i < Nx; i++)
-            u[U(i,j)] = u0[U(i,j)] + a * (u0[U(i+1,j)] + u0[U(i-1,j)] + v0[V(i,j+1)] + u0[U(i,j-1)] - 4*u0[U(i,j)]);
+        for (int j = 0; j < Ny; j++) for (int i = 1; i < Nx; i++) {
+            float dn = j > 0    ? u0[U(i,j-1)] : -u0[U(i,j)]; 
+            float up = j < Ny-1 ? u0[U(i,j+1)] : -u0[U(i,j)];
+            u[U(i,j)] = u0[U(i,j)] + a * (u0[U(i+1,j)] + u0[U(i-1,j)] + up + dn - 4*u0[U(i,j)]);
+        }
         for (int j = 1; j < Ny; j++) for (int i = 1; i < Nx-1; i++)
             v[V(i,j)] = v0[V(i,j)] + a * (v0[V(i+1,j)] + v0[V(i-1,j)] + v0[V(i,j+1)] + v0[V(i,j-1)] - 4*v0[V(i,j)]);
     }
-
     void jet() {
         for (int j = 0; j < Ny; j++) {
             float y = (j + 0.5f) * dL - Ny * dL / 2.0f;     // metres from centre
             if (abs(y) < 0.02f) for (int i = 1; i < 3; i++) u[U(i,j)] = 5.0f;
         }
     }
+    void stepSize() {
+        float m = 1e-6f;
+        for (float x : u) m = std::max(m, abs(x));
+        for (float x : v) m = std::max(m, abs(x));
+        dt = std::min(cfl * dL / m, 0.2f * dL*dL / nu);
+    }
+
 };
 Fluid fluid;
 
 struct Object {
     vec2 pos; float r;
-    float angle = 0.0f; // radians
+    float angle = 0.0f, omega=0.0f;
     Object(vec2 pos, float r) : pos(pos), r(r) {}
 
     void draw () {
@@ -240,22 +264,25 @@ struct Object {
             }
         }
     }
+    void spin(float w) { omega = w; angle += w * fluid.dt; }
+
 };
 Object square(vec2(0.0f), 0.05f);
 
 int main () {
 
     while(!glfwWindowShouldClose(engine.window)) {
-        float frameDt = engine.run();
-        square.angle += engine.rotateInput(frameDt);
+        engine.run();
+        square.spin(engine.rotateInput());
 
         // --- physiques ---
-        fluid.jet();
         square.block(fluid);
+        fluid.jet();
+        fluid.boundaries(square.pos, square.omega);
         fluid.advect();
-        fluid.project();
         fluid.diffuse();
-        fluid.boundaries();
+        fluid.boundaries(square.pos, square.omega);
+        fluid.project();
 
         // --- draw ---
         fluid.draw();
@@ -264,6 +291,7 @@ int main () {
         glfwSwapBuffers(engine.window);
         glfwPollEvents();
     }
+
     glfwTerminate();
     return 0;
 }
