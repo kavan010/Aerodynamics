@@ -69,11 +69,11 @@ struct Engine {
 Engine engine;
 
 struct Fluid {
-    int Nx = 266, Ny=200;
-    float dL = 0.005f, dt = 1.f/60.f, cfl = 3.0f;
+    int Nx = 532, Ny=400;
+    float dL = 0.0025f, dt = 1.f/60.f;
     float maxVal = 2.2f;
     //     air density, viscosity, inlet wind speed
-    float rho = 1.2f, nu = 1.5e-5f, Uin = 3.0f; 
+    float rho = 1.2f, nu = 1.5e-5f, Uin = 0.03f; 
 
     vector<float> u, v, p;
     vector<bool> solid;
@@ -81,7 +81,7 @@ struct Fluid {
     int V(int i, int j) { return i + j*Nx; }
 
     Fluid (){
-        u.resize((Nx+1)*Ny, 1.0f);
+        u.resize((Nx+1)*Ny, Uin);
         v.resize(Nx*(Ny+1), 0.0f);
         p.resize(Nx*Ny, 0.0f);
         solid.resize(Nx*Ny, false);
@@ -173,52 +173,78 @@ struct Fluid {
         vector<float> div(Nx*Ny, 0.0f);
         for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++)
             if (!solid[i+j*Nx]) div[i+j*Nx] = (u[U(i+1,j)] - u[U(i,j)] + v[V(i,j+1)] - v[V(i,j)]) / dL;
-
-        float s = rho * dL*dL / dt;
-        for (int it = 0; it < 100; it++)
-            for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++) {
-                if (solid[i+j*Nx]) continue;
-                float sum = 0.0f; int n = 0;
-                if (i > 0    && !solid[(i-1)+j*Nx]) { sum += p[(i-1)+j*Nx]; n++; }
-                if (i < Nx-1) { if (!solid[(i+1)+j*Nx]) { sum += p[(i+1)+j*Nx]; n++; } }
-                else n++;                                   // outlet ghost cell, p = 0
-                if (j > 0    && !solid[i+(j-1)*Nx]) { sum += p[i+(j-1)*Nx]; n++; }
-                if (j < Ny-1 && !solid[i+(j+1)*Nx]) { sum += p[i+(j+1)*Nx]; n++; }
-                if (n) p[i+j*Nx] = mix(p[i+j*Nx], (sum - s*div[i+j*Nx]) / n, 1.9f);
+        float s = rho * dL*dL / dt, err = 0.0f;
+        int it = 0;
+        for (; it < 500; it++) {
+            err = 0.0f;
+            for (int color = 0; color < 2; color++) {       
+                #pragma omp parallel for reduction(max:err)
+                for (int j = 0; j < Ny; j++) for (int i = (j + color) % 2; i < Nx; i += 2) {
+                    if (solid[i+j*Nx]) continue;
+                    float sum = 0.0f; int n = 0;
+                    if (i > 0    && !solid[(i-1)+j*Nx]) { sum += p[(i-1)+j*Nx]; n++; }
+                    if (i < Nx-1) { if (!solid[(i+1)+j*Nx]) { sum += p[(i+1)+j*Nx]; n++; } }
+                    else n++;                       
+                    if (j > 0    && !solid[i+(j-1)*Nx]) { sum += p[i+(j-1)*Nx]; n++; }
+                    if (j < Ny-1 && !solid[i+(j+1)*Nx]) { sum += p[i+(j+1)*Nx]; n++; }
+                    if (!n) continue;
+                    float r = sum - n*p[i+j*Nx] - s*div[i+j*Nx];
+                    err = std::max(err, abs(r));
+                    p[i+j*Nx] += 1.97f * r / n;     
+                }
             }
+            if (err / s * dt < 1e-4f) break;
+        }
+        // static int frame = 0;
+        // if (frame++ % 60 == 0) cout << "pressure iters: " << it << "  err: " << err / s * dt << endl;
+
 
         float k = dt / (rho * dL);
         for (int j = 0; j < Ny; j++) for (int i = 1; i < Nx; i++)
             if (!solid[i+j*Nx] && !solid[(i-1)+j*Nx]) u[U(i,j)] -= k * (p[i+j*Nx] - p[(i-1)+j*Nx]);
         for (int j = 0; j < Ny; j++)
-            if (!solid[(Nx-1)+j*Nx]) u[U(Nx,j)] -= k * (0.0f - p[(Nx-1)+j*Nx]);   // outlet face
+            if (!solid[(Nx-1)+j*Nx]) u[U(Nx,j)] -= k * (0.0f - p[(Nx-1)+j*Nx]);
         for (int j = 1; j < Ny; j++) for (int i = 0; i < Nx; i++)
             if (!solid[i+j*Nx] && !solid[i+(j-1)*Nx]) v[V(i,j)] -= k * (p[i+j*Nx] - p[i+(j-1)*Nx]);
     }
     void diffuse() {
         vector<float> u0 = u, v0 = v;
         float a = nu * dt / (dL*dL);
-        for (int j = 0; j < Ny; j++) for (int i = 1; i < Nx; i++) {
-            float dn = j > 0    ? u0[U(i,j-1)] : -u0[U(i,j)]; 
-            float up = j < Ny-1 ? u0[U(i,j+1)] : -u0[U(i,j)];
-            u[U(i,j)] = u0[U(i,j)] + a * (u0[U(i+1,j)] + u0[U(i-1,j)] + up + dn - 4*u0[U(i,j)]);
+        int iters = std::min(50, 2 + (int)(10*a));
+        for (int it = 0; it < iters; it++) {
+            for (int j = 0; j < Ny; j++) for (int i = 1; i < Nx; i++) {
+                float dn = j > 0    ? u[U(i,j-1)] : -u[U(i,j)];
+                float up = j < Ny-1 ? u[U(i,j+1)] : -u[U(i,j)];
+                u[U(i,j)] = (u0[U(i,j)] + a * (u[U(i+1,j)] + u[U(i-1,j)] + up + dn)) / (1 + 4*a);
+            }
+            for (int j = 1; j < Ny; j++) for (int i = 0; i < Nx; i++) {
+                float lf = i > 0    ? v[V(i-1,j)] : -v[V(i,j)]; 
+                float rt = i < Nx-1 ? v[V(i+1,j)] :  v[V(i,j)];
+                v[V(i,j)] = (v0[V(i,j)] + a * (lf + rt + v[V(i,j+1)] + v[V(i,j-1)])) / (1 + 4*a);
+            }
         }
-        for (int j = 1; j < Ny; j++) for (int i = 1; i < Nx-1; i++)
-            v[V(i,j)] = v0[V(i,j)] + a * (v0[V(i+1,j)] + v0[V(i-1,j)] + v0[V(i,j+1)] + v0[V(i,j-1)] - 4*v0[V(i,j)]);
     }
+
     void jet() {
         for (int j = 0; j < Ny; j++) {
             float y = (j + 0.5f) * dL - Ny * dL / 2.0f;     // metres from centre
             if (abs(y) < 0.02f) for (int i = 1; i < 3; i++) u[U(i,j)] = 5.0f;
         }
     }
-    void stepSize() {
-        float m = 1e-6f;
-        for (float x : u) m = std::max(m, abs(x));
-        for (float x : v) m = std::max(m, abs(x));
-        dt = std::min(cfl * dL / m, 0.2f * dL*dL / nu);
+    void forces() {
+    for (int j = 0; j < Ny; j++) {
+        float y = (j + 0.5f) * dL - Ny * dL / 2.0f;
+        if (abs(y) < 0.02f) for (int i = 1; i < 3; i++) u[U(i,j)] += 300.0f * dt;
     }
-
+}
+    // void probe(vec2 c, float D) {
+    //     static float t = 0, last = 0, prev = 0;
+    //     t += dt;
+    //     int i = (c.x + Nx*dL/2 + 3*D) / dL, j = (c.y + Ny*dL/2) / dL;
+    //     float now = v[V(i,j)];
+    //     if (prev < 0 && now >= 0) { if (last > 0) cout << "St = " << D / (t - last) / Uin << endl; last = t; }
+    //     prev = now;
+    // }
 };
 Fluid fluid;
 
@@ -267,7 +293,7 @@ struct Object {
     void spin(float w) { omega = w; angle += w * fluid.dt; }
 
 };
-Object square(vec2(0.0f), 0.05f);
+Object square(vec2(-0.4f, 0.0f), 0.025f);
 
 int main () {
 
@@ -277,12 +303,13 @@ int main () {
 
         // --- physiques ---
         square.block(fluid);
-        fluid.jet();
+        //fluid.forces();
         fluid.boundaries(square.pos, square.omega);
         fluid.advect();
         fluid.diffuse();
         fluid.boundaries(square.pos, square.omega);
         fluid.project();
+fluid.probe(square.pos, 2*square.r);
 
         // --- draw ---
         fluid.draw();
