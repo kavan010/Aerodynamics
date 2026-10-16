@@ -107,7 +107,7 @@ struct Fluid {
             for (int x = 0; x < Nx; x++) {
                 float val = length(vec2(u[U(x,y)]+u[U(x+1,y)], v[V(x,y)]+v[V(x,y+1)]) * 0.5f);
                 vec3 col = colorMap(glm::clamp(val / (maxVal * Uin), 0.0f, 1.0f));
-                if (solid[x + y*Nx]) col = vec3(1);
+                // if (solid[x + y*Nx]) col = vec3(1);
                 glColor3f(col.r, col.g, col.b);
 
                 float px = x*cellW - engine.WIDTH / 2.0f;
@@ -151,12 +151,17 @@ struct Fluid {
     }
     void trace(const vector<float>& f, vector<float>& out, bool isU, float k, vector<float>* lo = nullptr, vector<float>* hi = nullptr) {
         int w = isU ? Nx+1 : Nx, h = isU ? Ny : Ny+1;
+        auto vel = [&](float x, float y) {                       // velocity at a point in f's grid coords
+            return isU ? vec2(sample(u, Nx+1, Ny, x, y), sample(v, Nx, Ny+1, x - 0.5f, y + 0.5f))
+                    : vec2(sample(u, Nx+1, Ny, x + 0.5f, y - 0.5f), sample(v, Nx, Ny+1, x, y));
+        };
         for (int j = 0; j < h; j++) for (int i = 0; i < w; i++) {
-            int n = i + j*w;                                                   // same as U(i,j) / V(i,j)
-            float vx = isU ? u[n] : sample(u, Nx+1, Ny, i + 0.5f, j - 0.5f);
-            float vy = isU ? sample(v, Nx, Ny+1, i - 0.5f, j + 0.5f) : v[n];
-            out[n] = sample(f, w, h, i - vx*k, j - vy*k, lo ? &(*lo)[n] : nullptr, hi ? &(*hi)[n] : nullptr);
+            int n = i + j*w;
+            vec2 a = vel(i, j);                                  // velocity here
+            vec2 m = vel(i - a.x*k/2, j - a.y*k/2);              // velocity halfway back
+            out[n] = sample(f, w, h, i - m.x*k, j - m.y*k, lo ? &(*lo)[n] : nullptr, hi ? &(*hi)[n] : nullptr);
         }
+
     }
     void advect() {
         float k = dt / dL;
@@ -259,7 +264,7 @@ struct Object {
     unsigned char* img = nullptr; 
 
     Object(vec2 pos, float r, const char* path) : pos(pos), r(r) {
-        int n; img = stbi_load(path, &w, &h, &n, 2);
+        int n; img = stbi_load(path, &w, &h, &n, 4);
         if (!img) cerr << "no png lol" << endl;
 
         vector<unsigned char> m(w*h*2);         
@@ -268,7 +273,8 @@ struct Object {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, w, h, 0, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, m.data());
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, img);
+
 
     }
 
@@ -298,8 +304,7 @@ struct Object {
         float mpp = 2*r / std::max(w, h);              
         int px = d.x / mpp + w/2, py = h/2 - d.y / mpp; 
         if (!img || px < 0 || py < 0 || px >= w || py >= h) return false;
-        unsigned char* c = img + (px + py*w) * 2;
-        return c[1] > 128 && c[0] < 128;            
+        return img[(px + py*w) * 4 + 3] > 128;         
     }
     void block(Fluid& f) {
         for (int y = 0; y < f.Ny; y++) {
@@ -314,7 +319,7 @@ struct Object {
     void spin(float w) { omega = w; angle += w * fluid.dt; }
 
 };
-Object square(vec2(0.0f, 0.0f), 0.2f, "shapes/airfoil.png");
+Object square(vec2(0.0f, 0.0f), 0.3f, "shapes/bullet.png");
 
 int main () {
 
