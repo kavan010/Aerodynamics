@@ -75,7 +75,7 @@ struct Fluid {
     float dL = 0.005f, dt = 1.f/60.f;
     float maxVal = 2.2f;
     //     air density, viscosity, inlet wind speed
-    float rho = 1.2f, nu = 1.5e-5f, Uin = 0.33f; 
+    float rho = 1.2f, nu = 1.5e-5f, Uin = 3.33f; 
 
     vector<float> u, v, p;
     vector<bool> solid;
@@ -253,6 +253,7 @@ Fluid fluid;
 
 struct Object {
     vec2 pos; float r;
+    GLuint tex = 0;
     float angle = 0.0f, omega=0.0f;
     int w = 0, h = 0;
     unsigned char* img = nullptr; 
@@ -260,26 +261,33 @@ struct Object {
     Object(vec2 pos, float r, const char* path) : pos(pos), r(r) {
         int n; img = stbi_load(path, &w, &h, &n, 2);
         if (!img) cerr << "no png lol" << endl;
+
+        vector<unsigned char> m(w*h*2);         
+        for (int k = 0; k < w*h; k++) { m[2*k] = 255; m[2*k+1] = (img[2*k+1] > 128 && img[2*k] < 128) ? 255 : 0; }
+        glGenTextures(1, &tex); glBindTexture(GL_TEXTURE_2D, tex);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_LUMINANCE_ALPHA, w, h, 0, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, m.data());
+
     }
 
-    void draw () {
+    void draw() {
         float pxPerM = engine.WIDTH / (fluid.Nx * fluid.dL);
-        vec2 c = pos * pxPerM;
-        float s = r * pxPerM;
-
+        float sx = r * pxPerM * w / std::max(w, h), sy = r * pxPerM * h / std::max(w, h);   // half size in pixels
         glPushMatrix();
-        glTranslatef(c.x, c.y, 0.0f);
-        glRotatef(angle * 180.0f / M_PI, 0.0f, 0.0f, 1.0f);
-        glTranslatef(-c.x, -c.y, 0.0f);
-        glColor3f(1.0f, 1.0f, 1.0f);
-        glBegin(GL_TRIANGLE_FAN);
-        glVertex2f(c.x,   c.y);
-        glVertex2f(c.x-s, c.y-s);
-        glVertex2f(c.x+s, c.y-s);
-        glVertex2f(c.x+s, c.y+s);
-        glVertex2f(c.x-s, c.y+s);
-        glVertex2f(c.x-s, c.y-s);
+        glTranslatef(pos.x * pxPerM, pos.y * pxPerM, 0);
+        glRotatef(angle * 180 / M_PI, 0, 0, 1);
+        glEnable(GL_TEXTURE_2D); glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glColor3f(1, 1, 1);
+        glBegin(GL_QUADS);
+        glTexCoord2f(0,1); glVertex2f(-sx, -sy);
+        glTexCoord2f(1,1); glVertex2f( sx, -sy);
+        glTexCoord2f(1,0); glVertex2f( sx,  sy);
+        glTexCoord2f(0,0); glVertex2f(-sx,  sy);
         glEnd();
+        glDisable(GL_TEXTURE_2D); glDisable(GL_BLEND);
         glPopMatrix();
     }
     
@@ -326,7 +334,7 @@ int main () {
 
         // --- draw ---
         fluid.draw();
-        // square.draw();
+        square.draw();
 
         glfwSwapBuffers(engine.window);
         glfwPollEvents();
