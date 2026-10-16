@@ -69,8 +69,8 @@ struct Engine {
 Engine engine;
 
 struct Fluid {
-    int Nx = 532, Ny=400;
-    float dL = 0.0025f, dt = 1.f/60.f;
+    int Nx = 266, Ny=200;
+    float dL = 0.005f, dt = 1.f/60.f;
     float maxVal = 2.2f;
     //     air density, viscosity, inlet wind speed
     float rho = 1.2f, nu = 1.5e-5f, Uin = 0.03f; 
@@ -309,7 +309,7 @@ int main () {
         fluid.diffuse();
         fluid.boundaries(square.pos, square.omega);
         fluid.project();
-fluid.probe(square.pos, 2*square.r);
+        // fluid.probe(square.pos, 2*square.r);
 
         // --- draw ---
         fluid.draw();
