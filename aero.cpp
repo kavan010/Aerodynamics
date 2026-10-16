@@ -5,6 +5,8 @@
 #include <iostream>
 #include <cmath>
 #include <algorithm>
+#define STB_IMAGE_IMPLEMENTATION
+#include "stb_image.h"
 using namespace glm;
 using namespace std;
 
@@ -73,7 +75,7 @@ struct Fluid {
     float dL = 0.005f, dt = 1.f/60.f;
     float maxVal = 2.2f;
     //     air density, viscosity, inlet wind speed
-    float rho = 1.2f, nu = 1.5e-5f, Uin = 0.03f; 
+    float rho = 1.2f, nu = 1.5e-5f, Uin = 0.33f; 
 
     vector<float> u, v, p;
     vector<bool> solid;
@@ -105,6 +107,7 @@ struct Fluid {
             for (int x = 0; x < Nx; x++) {
                 float val = length(vec2(u[U(x,y)]+u[U(x+1,y)], v[V(x,y)]+v[V(x,y+1)]) * 0.5f);
                 vec3 col = colorMap(glm::clamp(val / (maxVal * Uin), 0.0f, 1.0f));
+                if (solid[x + y*Nx]) col = vec3(1);
                 glColor3f(col.r, col.g, col.b);
 
                 float px = x*cellW - engine.WIDTH / 2.0f;
@@ -251,7 +254,13 @@ Fluid fluid;
 struct Object {
     vec2 pos; float r;
     float angle = 0.0f, omega=0.0f;
-    Object(vec2 pos, float r) : pos(pos), r(r) {}
+    int w = 0, h = 0;
+    unsigned char* img = nullptr; 
+
+    Object(vec2 pos, float r, const char* path) : pos(pos), r(r) {
+        int n; img = stbi_load(path, &w, &h, &n, 2);
+        if (!img) cerr << "no png lol" << endl;
+    }
 
     void draw () {
         float pxPerM = engine.WIDTH / (fluid.Nx * fluid.dL);
@@ -276,9 +285,13 @@ struct Object {
     
     bool inside(vec2 p) {
         vec2 d = p - pos;
-        d = vec2(cos(-angle)*d.x - sin(-angle)*d.y,   // rotate into the square's frame
-                 sin(-angle)*d.x + cos(-angle)*d.y);
-        return abs(d.x) < r && abs(d.y) < r;
+        d = vec2(cos(-angle)*d.x - sin(-angle)*d.y,
+                sin(-angle)*d.x + cos(-angle)*d.y);
+        float mpp = 2*r / std::max(w, h);              
+        int px = d.x / mpp + w/2, py = h/2 - d.y / mpp; 
+        if (!img || px < 0 || py < 0 || px >= w || py >= h) return false;
+        unsigned char* c = img + (px + py*w) * 2;
+        return c[1] > 128 && c[0] < 128;            
     }
     void block(Fluid& f) {
         for (int y = 0; y < f.Ny; y++) {
@@ -293,7 +306,7 @@ struct Object {
     void spin(float w) { omega = w; angle += w * fluid.dt; }
 
 };
-Object square(vec2(-0.4f, 0.0f), 0.025f);
+Object square(vec2(0.0f, 0.0f), 0.2f, "shapes/airfoil.png");
 
 int main () {
 
@@ -313,7 +326,7 @@ int main () {
 
         // --- draw ---
         fluid.draw();
-        square.draw();
+        // square.draw();
 
         glfwSwapBuffers(engine.window);
         glfwPollEvents();
