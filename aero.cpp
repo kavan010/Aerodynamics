@@ -216,22 +216,32 @@ struct Fluid {
             if (!solid[i+j*Nx] && !solid[i+(j-1)*Nx]) v[V(i,j)] -= k * (p[i+j*Nx] - p[i+(j-1)*Nx]);
     }
     void diffuse() {
-        vector<float> u0 = u, v0 = v;
-        float a = nu * dt / (dL*dL);
-        int iters = std::min(50, 2 + (int)(10*a));
+        vector<float> u0 = u, v0 = v, nt(Nx*Ny, 0.0f);
+        float cs = 0.17f * dL;                                   // Smagorinsky: sub-cell eddies act like extra viscosity
+        for (int j = 1; j < Ny-1; j++) for (int i = 1; i < Nx-1; i++) {
+            float ux = u[U(i+1,j)] - u[U(i,j)], vy = v[V(i,j+1)] - v[V(i,j)];
+            float uy = (u[U(i,j+1)] + u[U(i+1,j+1)] - u[U(i,j-1)] - u[U(i+1,j-1)]) / 4;
+            float vx = (v[V(i+1,j)] + v[V(i+1,j+1)] - v[V(i-1,j)] - v[V(i-1,j+1)]) / 4;
+            nt[i+j*Nx] = cs*cs * sqrt(2*(ux*ux + vy*vy) + (uy+vx)*(uy+vx)) / dL;   // eddy viscosity, grows where flow is chaotic
+        }
+        float k = dt / (dL*dL);
+        int iters = std::min(50, 2 + (int)(10 * (nu + *std::max_element(nt.begin(), nt.end())) * k));
         for (int it = 0; it < iters; it++) {
             for (int j = 0; j < Ny; j++) for (int i = 1; i < Nx; i++) {
+                float a = (nu + (nt[(i-1)+j*Nx] + nt[i+j*Nx]) / 2) * k;
                 float dn = j > 0    ? u[U(i,j-1)] : -u[U(i,j)];
                 float up = j < Ny-1 ? u[U(i,j+1)] : -u[U(i,j)];
                 u[U(i,j)] = (u0[U(i,j)] + a * (u[U(i+1,j)] + u[U(i-1,j)] + up + dn)) / (1 + 4*a);
             }
             for (int j = 1; j < Ny; j++) for (int i = 0; i < Nx; i++) {
-                float lf = i > 0    ? v[V(i-1,j)] : -v[V(i,j)]; 
+                float a = (nu + (nt[i+(j-1)*Nx] + nt[i+j*Nx]) / 2) * k;
+                float lf = i > 0    ? v[V(i-1,j)] : -v[V(i,j)];
                 float rt = i < Nx-1 ? v[V(i+1,j)] :  v[V(i,j)];
                 v[V(i,j)] = (v0[V(i,j)] + a * (lf + rt + v[V(i,j+1)] + v[V(i,j-1)])) / (1 + 4*a);
             }
         }
     }
+
 
     void jet() {
         for (int j = 0; j < Ny; j++) {
@@ -266,6 +276,11 @@ struct Object {
     Object(vec2 pos, float r, const char* path) : pos(pos), r(r) {
         int n; img = stbi_load(path, &w, &h, &n, 4);
         if (!img) cerr << "no png lol" << endl;
+
+        int vis = 0, dark = 0;                              
+        for (int k = 0; k < w*h; k++) if (img[4*k+3] > 128) { vis++; if (img[4*k] < 30 && img[4*k+1] < 30 && img[4*k+2] < 30) dark++; }
+        if (dark > 0.95f * vis) for (int k = 0; k < w*h; k++) img[4*k] = img[4*k+1] = img[4*k+2] = 255;
+
 
         vector<unsigned char> m(w*h*2);         
         for (int k = 0; k < w*h; k++) { m[2*k] = 255; m[2*k+1] = (img[2*k+1] > 128 && img[2*k] < 128) ? 255 : 0; }
@@ -319,7 +334,7 @@ struct Object {
     void spin(float w) { omega = w; angle += w * fluid.dt; }
 
 };
-Object square(vec2(0.0f, 0.0f), 0.3f, "shapes/bullet.png");
+Object square(vec2(0.0f, 0.0f), 0.2f, "shapes2D/f16.png");
 
 int main () {
 
