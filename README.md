@@ -22,6 +22,11 @@ Navier stokes in the functions:
 
    
 <img width="847" height="638" alt="image" src="https://github.com/user-attachments/assets/2f046577-9e56-435f-8b14-f13e87c17257" />
-<img width="791" height="578" alt="image" src="https://github.com/user-attachments/assets/e1cc4d9d-20b8-4f2c-82eb-ea1d972af729" />
 
 added: velocity advect, pressure, viscosity diffuce. 
+
+Oct 16th, 2026:
+
+<img width="717" height="509" alt="image" src="https://github.com/user-attachments/assets/11505ff0-8931-4077-af3d-7ae50d74d2fa" />
+
+added: multi-shape objects importable by PNG
