@@ -9,6 +9,7 @@
                 "-fdiagnostics-color=always",
                 "-O2",
                 "-march=native",
+                "-fopenmp",
                 "${workspaceFolder}/aero.cpp",
                 "-o",
                 "${workspaceFolder}/sim",
