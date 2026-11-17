@@ -8,9 +8,10 @@
 #include <algorithm>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
+#include <fstream>
 using namespace glm;
 using namespace std;
-using real = float;
+
 
 // --- Twin-Turbo 5.2L V10 ----
 struct Engine {
@@ -93,11 +94,11 @@ struct Engine {
 Engine engine;
 
 struct Fluid {
-    int Nx = 384, Ny = 192, Nz = 128;
-    real dL = 0.005, dt = 0.25, maxVal = 2.2;
-    real rho = 1.2, nu = 1.5e-5, Uin = 0.009375;
+    int Nx = 128, Ny = 96, Nz = 64;
+    float dL = 0.01, dt = 1.0/60.0, maxVal = 2.2;
+    float rho = 1.2, nu = 1.5e-5, Uin = 1.0;
 
-    vector<real> u, v, w, p;
+    vector<float> u, v, w, p;
     vector<char> solid;
     int U(int i, int j, int k) { return i + j*(Nx+1) + k*(Nx+1)*Ny; }
     int V(int i, int j, int k) { return i + j*Nx + k*Nx*(Ny+1); }
@@ -105,7 +106,7 @@ struct Fluid {
     int C(int i, int j, int k) { return i + j*Nx + k*Nx*Ny; }
     ivec3 N(int c) { return ivec3(Nx + (c==0), Ny + (c==1), Nz + (c==2)); }
     vec3 off(int c) { return vec3(c != 0, c != 1, c != 2) * 0.5f; }
-    vector<real>& F(int c) { return c == 0 ? u : c == 1 ? v : w; }
+    vector<float>& F(int c) { return c == 0 ? u : c == 1 ? v : w; }
 
     Fluid() {
         u.resize((Nx+1)*Ny*Nz, Uin);
@@ -137,11 +138,11 @@ struct Fluid {
             float px = a.x + x*dL, py = a.y + y*dL, z = a.z + (k + 0.5f)*dL;
             glVertex3f(px, py, z); glVertex3f(px+dL, py, z); glVertex3f(px+dL, py+dL, z); glVertex3f(px, py+dL, z);
         }
-        for (int z = 0; z < Nz; z++) for (int x = 0; x < Nx; x++) {
-            cell(x, jy, z);
-            float px = a.x + x*dL, pz = a.z + z*dL, y = a.y + (jy + 0.5f)*dL;
-            glVertex3f(px, y, pz); glVertex3f(px+dL, y, pz); glVertex3f(px+dL, y, pz+dL); glVertex3f(px, y, pz+dL);
-        }
+        // for (int z = 0; z < Nz; z++) for (int x = 0; x < Nx; x++) {
+        //     cell(x, jy, z);
+        //     float px = a.x + x*dL, pz = a.z + z*dL, y = a.y + (jy + 0.5f)*dL;
+        //     glVertex3f(px, y, pz); glVertex3f(px+dL, y, pz); glVertex3f(px+dL, y, pz+dL); glVertex3f(px, y, pz+dL);
+        // }
         glEnd();
 
         glColor3f(1, 1, 1);
@@ -171,10 +172,10 @@ struct Fluid {
             w[W(i,j,k)] = w[W(i,j,k+1)] = s.z;
         }
     }
-    real sample(const vector<real>& f, ivec3 n, vec3 q, real* lo = nullptr, real* hi = nullptr) {
+    float sample(const vector<float>& f, ivec3 n, vec3 q, float* lo = nullptr, float* hi = nullptr) {
         q = glm::clamp(q, vec3(0), vec3(n) - 1.001f);
         ivec3 a(q); vec3 t = q - vec3(a);
-        real c[8];
+        float c[8];
         for (int m = 0; m < 8; m++) c[m] = f[(a.x + (m&1)) + (a.y + (m>>1&1))*n.x + (a.z + (m>>2))*n.x*n.y];
         if (lo) { *lo = *std::min_element(c, c+8); *hi = *std::max_element(c, c+8); }
         return mix(mix(mix(c[0], c[1], t.x), mix(c[2], c[3], t.x), t.y),
@@ -183,7 +184,7 @@ struct Fluid {
     vec3 velAt(vec3 q) {
         return vec3(sample(u, N(0), q - off(0)), sample(v, N(1), q - off(1)), sample(w, N(2), q - off(2)));
     }
-    void trace(int c, const vector<real>& f, vector<real>& out, real s, vector<real>* lo = nullptr, vector<real>* hi = nullptr) {
+    void trace(int c, const vector<float>& f, vector<float>& out, float s, vector<float>* lo = nullptr, vector<float>* hi = nullptr) {
         ivec3 n = N(c);
         #pragma omp parallel for
         for (int k = 0; k < n.z; k++) for (int j = 0; j < n.y; j++) for (int i = 0; i < n.x; i++) {
@@ -194,15 +195,15 @@ struct Fluid {
         }
     }
     void advect() {
-        real s = dt / dL;
-        vector<real> res[3];
+        float s = dt / dL;
+        vector<float> res[3];
         for (int c = 0; c < 3; c++) {
-            const vector<real>& f = F(c);
-            vector<real> f1 = f, f2 = f, lo = f, hi = f;
+            const vector<float>& f = F(c);
+            vector<float> f1 = f, f2 = f, lo = f, hi = f;
             trace(c, f, f1, s, &lo, &hi);
             trace(c, f1, f2, -s);
             for (size_t n = 0; n < f.size(); n++) {
-                real e = f1[n] + 0.5f*(f[n] - f2[n]);
+                float e = f1[n] + 0.5f*(f[n] - f2[n]);
                 f2[n] = (e < lo[n] || e > hi[n]) ? f1[n] : e;
             }
             res[c] = f2;
@@ -210,12 +211,12 @@ struct Fluid {
         u = res[0]; v = res[1]; w = res[2];
     }
     void project() {
-        vector<real> div(Nx*Ny*Nz, 0);
+        vector<float> div(Nx*Ny*Nz, 0);
         #pragma omp parallel for
         for (int k = 0; k < Nz; k++) for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++)
             if (!solid[C(i,j,k)]) div[C(i,j,k)] = (u[U(i+1,j,k)] - u[U(i,j,k)] + v[V(i,j+1,k)] - v[V(i,j,k)]
                                                 + w[W(i,j,k+1)] - w[W(i,j,k)]) / dL;
-        real s = rho * dL*dL / dt, err = 0;
+        float s = rho * dL*dL / dt, err = 0;
         int it = 0;
         for (; it < 500; it++) {
             err = 0;
@@ -223,7 +224,7 @@ struct Fluid {
                 #pragma omp parallel for reduction(max:err)
                 for (int k = 0; k < Nz; k++) for (int j = 0; j < Ny; j++) for (int i = (j + k + color) % 2; i < Nx; i += 2) {
                     int c = C(i,j,k); if (solid[c]) continue;
-                    real sum = 0; int n = 0;
+                    float sum = 0; int n = 0;
                     int nb[6][3] = {{i-1,j,k}, {i+1,j,k}, {i,j-1,k}, {i,j+1,k}, {i,j,k-1}, {i,j,k+1}};
                     for (auto& q : nb) {
                         if (q[0] == Nx) { n++; continue; }
@@ -232,7 +233,7 @@ struct Fluid {
                         if (!solid[m]) { sum += p[m]; n++; }
                     }
                     if (!n) continue;
-                    real r = sum - n*p[c] - s*div[c];
+                    float r = sum - n*p[c] - s*div[c];
                     err = std::max(err, abs(r));
                     p[c] += 1.97f * r / n;
                 }
@@ -242,7 +243,7 @@ struct Fluid {
         static int frame = 0;
         if (frame++ % 60 == 0) cout << "pressure iters: " << it << "  err: " << err / s * dt << endl;
 
-        real g = dt / (rho * dL);
+        float g = dt / (rho * dL);
         #pragma omp parallel for
         for (int k = 0; k < Nz; k++) for (int j = 0; j < Ny; j++) {
             for (int i = 1; i < Nx; i++)
@@ -255,15 +256,15 @@ struct Fluid {
         }
     }
     void diffuse() {
-        real a = nu * dt / (dL*dL);
+        float a = nu * dt / (dL*dL);
         int iters = std::min(50, 2 + (int)(10*a));
         for (int c = 0; c < 3; c++) {
-            vector<real>& f = F(c); vector<real> f0 = f; ivec3 n = N(c);
+            vector<float>& f = F(c); vector<float> f0 = f; ivec3 n = N(c);
             for (int it = 0; it < iters; it++)
                 for (int k = 0; k < n.z; k++) for (int j = 0; j < n.y; j++) for (int i = 0; i < n.x; i++) {
                     ivec3 q(i, j, k);
                     if (q[c] == 0 || q[c] == n[c]-1) continue;
-                    int id = i + j*n.x + k*n.x*n.y; real sum = 0;
+                    int id = i + j*n.x + k*n.x*n.y; float sum = 0;
                     for (int d = 0; d < 3; d++) for (int s = -1; s <= 1; s += 2) {
                         ivec3 m = q; m[d] += s;
                         sum += (m[d] < 0 || m[d] >= n[d]) ? f[id] : f[m.x + m.y*n.x + m.z*n.x*n.y];
@@ -275,7 +276,7 @@ struct Fluid {
 
     vec3 drag() {
         vec3 F(0); ivec3 n(Nx, Ny, Nz);
-        real A = dL*dL, mu = rho*nu;
+        float A = dL*dL, mu = rho*nu;
         for (int k = 0; k < Nz; k++) for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++) {
             if (solid[C(i,j,k)]) continue;
             vec3 uc((u[U(i,j,k)] + u[U(i+1,j,k)]) / 2, (v[V(i,j,k)] + v[V(i,j+1,k)]) / 2, (w[W(i,j,k)] + w[W(i,j,k+1)]) / 2);
@@ -292,48 +293,105 @@ struct Fluid {
 Fluid fluid;
 
 struct Object {
-    vec3 pos; real r; vec3 omega = vec3(0);
-    bool inside(vec3 q) { return length(q - pos) < r; }
+    vec3 pos; float r; vec3 omega = vec3(0);
+    vector<vec3> tri;
+
+    Object(vec3 pos, float r, const char* path) : pos(pos), r(r) {
+        ifstream f(path, ios::binary);
+        char h[80]; uint32_t n = 0;
+        f.read(h, 80); f.read((char*)&n, 4);
+        tri.resize(n*3);
+        for (uint32_t t = 0; t < n; t++) {
+            float d[12]; uint16_t a;
+            f.read((char*)d, 48); f.read((char*)&a, 2);
+            for (int m = 0; m < 3; m++) tri[t*3+m] = vec3(d[3+3*m], d[5+3*m], -d[4+3*m]);
+        }
+        vec3 lo(1e30f), hi(-1e30f);
+        float a = 3 * M_PI/2;
+        for (auto& p : tri) p = vec3(cos(a)*p.x + sin(a)*p.z, p.y, -sin(a)*p.x + cos(a)*p.z);
+
+        for (auto& p : tri) { lo = min(lo, p); hi = max(hi, p); }
+        vec3 e = hi - lo, c = (lo + hi) / 2.0f;
+        float s = 2*r / std::max({e.x, e.y, e.z});
+        for (auto& p : tri) p = (p - c) * s;
+        cout << n << " triangles" << endl;
+    }
+
     void block(Fluid& f) {
-        vec3 L = vec3(f.Nx, f.Ny, f.Nz) * f.dL;
-        for (int k = 0; k < f.Nz; k++) for (int j = 0; j < f.Ny; j++) for (int i = 0; i < f.Nx; i++)
-            f.solid[f.C(i,j,k)] = inside((vec3(i,j,k) + 0.5f) * f.dL - L/2.0f);
+        ivec3 n(f.Nx, f.Ny, f.Nz);
+        vec3 L = vec3(n) * f.dL;
+        vector<char> votes(f.Nx*f.Ny*f.Nz, 0);
+        for (int d = 0; d < 3; d++) {
+            int e = (d+1) % 3, g = (d+2) % 3;
+            vector<vector<float>> hit(n[e] * n[g]);
+            for (size_t t = 0; t < tri.size(); t += 3) {
+                vec3 a = tri[t] + pos + L/2.0f, b = tri[t+1] + pos + L/2.0f, c = tri[t+2] + pos + L/2.0f;
+                int e0 = std::max(0, (int)ceil(std::min({a[e], b[e], c[e]}) / f.dL - 0.5f));
+                int e1 = std::min(n[e]-1, (int)floor(std::max({a[e], b[e], c[e]}) / f.dL - 0.5f));
+                int g0 = std::max(0, (int)ceil(std::min({a[g], b[g], c[g]}) / f.dL - 0.5f));
+                int g1 = std::min(n[g]-1, (int)floor(std::max({a[g], b[g], c[g]}) / f.dL - 0.5f));
+                float det = (b[e]-a[e])*(c[g]-a[g]) - (c[e]-a[e])*(b[g]-a[g]);
+                if (abs(det) < 1e-12f) continue;
+                for (int y = g0; y <= g1; y++) for (int x = e0; x <= e1; x++) {
+                    float pe = (x + 0.5f)*f.dL - a[e], pg = (y + 0.5f)*f.dL - a[g];
+                    float s = (pe*(c[g]-a[g]) - (c[e]-a[e])*pg) / det;
+                    float w = ((b[e]-a[e])*pg - pe*(b[g]-a[g])) / det;
+                    if (s < 0 || w < 0 || s + w > 1) continue;
+                    hit[x + y*n[e]].push_back(a[d] + s*(b[d]-a[d]) + w*(c[d]-a[d]));
+                }
+            }
+            #pragma omp parallel for
+            for (int r = 0; r < n[e]*n[g]; r++) {
+                vector<float>& h = hit[r];
+                sort(h.begin(), h.end());
+                for (int m = 0; m < n[d]; m++) {
+                    ivec3 q; q[d] = m; q[e] = r % n[e]; q[g] = r / n[e];
+                    votes[f.C(q.x, q.y, q.z)] += (lower_bound(h.begin(), h.end(), (m + 0.5f)*f.dL) - h.begin()) % 2;
+                }
+            }
+        }
+        for (size_t i = 0; i < votes.size(); i++) f.solid[i] = votes[i] >= 2;
     }
     void draw() {
-        glPushMatrix();
-        glTranslatef(pos.x, pos.y, pos.z);
-        glColor3f(1, 1, 1);
-        gluSphere(gluNewQuadric(), r, 32, 16);
-        glPopMatrix();
+        vec3 light = normalize(vec3(0.3, 1, 0.5));
+        glBegin(GL_TRIANGLES);
+        for (size_t t = 0; t < tri.size(); t += 3) {
+            vec3 n = normalize(cross(tri[t+1] - tri[t], tri[t+2] - tri[t]));
+            float b = 0.3f + 0.7f * std::max(0.0f, dot(n, light));
+            glColor3f(b, b, b);
+            for (int m = 0; m < 3; m++) { vec3 p = tri[t+m] + pos; glVertex3f(p.x, p.y, p.z); }
+        }
+        glEnd();
     }
 };
-Object sphere{vec3(-0.4, 0, 0), 0.08};
+Object model(vec3(-0.2, 0, 0), 0.5, "models/rb22.stl");
+
 
 int main() {
-    cout << "Re = " << fluid.Uin * 2*sphere.r / fluid.nu << endl;
+    cout << "Re = " << fluid.Uin * 2*model.r / fluid.nu << endl;
+    model.block(fluid);
     while (!glfwWindowShouldClose(engine.window)) {
         engine.run();
 
         // --- physiques ---
-        sphere.block(fluid);
-        fluid.boundaries(sphere.pos, sphere.omega);
+        fluid.boundaries(model.pos, model.omega);
         fluid.advect();
         fluid.diffuse();
-        fluid.boundaries(sphere.pos, sphere.omega);
+        fluid.boundaries(model.pos, model.omega);
         fluid.project();
 
-        static int f = 0;
-        if (f++ % 60 == 0) {
-            vec3 F = fluid.drag();
-            cout << "Cd = " << F.x / (0.5f * fluid.rho * fluid.Uin*fluid.Uin * M_PI * sphere.r*sphere.r) << endl;
-        }
+        // static int f = 0;
+        // if (f++ % 60 == 0) {
+        //     vec3 F = fluid.drag();
+        //     cout << "Cd = " << F.x / (0.5f * fluid.rho * fluid.Uin*fluid.Uin * M_PI * sphere.r*sphere.r) << endl;
+        // }
 
         // --- draw ---
         static int k = fluid.Nz / 2, j = fluid.Ny / 2;
         k = engine.slice(k, fluid.Nz, GLFW_KEY_UP, GLFW_KEY_DOWN);
         j = engine.slice(j, fluid.Ny, GLFW_KEY_RIGHT, GLFW_KEY_LEFT);
         fluid.draw(k, j);
-        sphere.draw();
+        model.draw();
     }
     glfwTerminate();
     return 0;
