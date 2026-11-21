@@ -4,20 +4,13 @@
         {
             "type": "shell",
             "label": "build sim",
-            "command": "/usr/bin/g++",
+            "command": "/opt/cuda/bin/nvcc",
             "args": [
-                "-fdiagnostics-color=always",
-                "-O2",
-                "-march=native",
-                "-fopenmp",
-                "${workspaceFolder}/aero.cpp",
-                "-o",
-                "${workspaceFolder}/sim",
-                "-lGLEW",
-                "-lglfw",
-                "-lGL",
-                "-lGLU",
-                "-lX11"
+                "-O2", "-arch=sm_86", "--extended-lambda", "-std=c++17",
+                "-Xcompiler", "-fopenmp,-march=native",
+                "${workspaceFolder}/aero.cu",
+                "-o", "${workspaceFolder}/sim",
+                "-lGLEW", "-lglfw", "-lGL", "-lGLU", "-lX11", "-lgomp"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"

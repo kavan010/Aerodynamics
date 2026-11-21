@@ -1,7 +1,6 @@
 #include <GL/glew.h>
 #include <GL/glu.h>
 #include <GLFW/glfw3.h>
-#include <glm/glm.hpp>
 #include <vector>
 #include <iostream>
 #include <cmath>
@@ -9,7 +8,7 @@
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #include <fstream>
-using namespace glm;
+#include "gpu.h"
 using namespace std;
 
 
@@ -57,7 +56,7 @@ struct Engine {
         double x, y; glfwGetCursorPos(window, &x, &y);
         if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS) {
             yaw -= (x - mx) * 0.005;
-            pitch = glm::clamp(pitch + float(y - my) * 0.005f, -1.5f, 1.5f);
+            pitch = clamp(pitch + float(y - my) * 0.005f, -1.5f, 1.5f);
         }
         mx = x; my = y;
         glMatrixMode(GL_PROJECTION);
@@ -88,8 +87,14 @@ struct Engine {
     int slice(int k, int n, int up, int down) {
         if (glfwGetKey(window, up) == GLFW_PRESS) k++;
         if (glfwGetKey(window, down) == GLFW_PRESS) k--;
-        return glm::clamp(k, 0, n - 1);
+        return clamp(k, 0, n - 1);
     }
+
+    // ---- GPU ----
+    template <class T> T* alloc(size_t n) { T* p; cudaMallocManaged(&p, n * sizeof(T)); cudaMemset(p, 0, n * sizeof(T)); sync(); return p; }
+    template <class F> void gpu(int n, F f) { kernel<<<(n + 255) / 256, 256>>>(n, f); }
+    template <class T> void copy(T* to, T* from, size_t n) { cudaMemcpyAsync(to, from, n * sizeof(T), cudaMemcpyDefault); }
+    void sync() { cudaDeviceSynchronize(); }
 };
 Engine engine;
 
@@ -129,8 +134,8 @@ struct Fluid {
         vec3 a = -vec3(Nx, Ny, Nz) * dL / 2.0f, b = -a;
         auto cell = [&](int x, int y, int z) {
             vec3 s((u[U(x,y,z)] + u[U(x+1,y,z)]) / 2, (v[V(x,y,z)] + v[V(x,y+1,z)]) / 2, (w[W(x,y,z)] + w[W(x,y,z+1)]) / 2);
-            vec3 col = solid[C(x,y,z)] ? vec3(1) : colorMap(glm::clamp(length(s) / (maxVal * Uin), 0.0f, 1.0f));
-            glColor3f(col.r, col.g, col.b);
+            vec3 col = solid[C(x,y,z)] ? vec3(1) : colorMap(clamp(length(s) / (maxVal * Uin), 0.0f, 1.0f));
+            glColor3f(col.x, col.y, col.z);
         };
         glBegin(GL_QUADS);
         for (int y = 0; y < Ny; y++) for (int x = 0; x < Nx; x++) {
@@ -173,7 +178,7 @@ struct Fluid {
         }
     }
     float sample(const vector<float>& f, ivec3 n, vec3 q, float* lo = nullptr, float* hi = nullptr) {
-        q = glm::clamp(q, vec3(0), vec3(n) - 1.001f);
+        q = clamp(q, vec3(0), vec3(n) - 1.001f);
         ivec3 a(q); vec3 t = q - vec3(a);
         float c[8];
         for (int m = 0; m < 8; m++) c[m] = f[(a.x + (m&1)) + (a.y + (m>>1&1))*n.x + (a.z + (m>>2))*n.x*n.y];
