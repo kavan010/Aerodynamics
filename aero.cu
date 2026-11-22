@@ -99,28 +99,42 @@ struct Engine {
 Engine engine;
 
 struct Fluid {
-    int Nx = 128, Ny = 96, Nz = 64;
-    float dL = 0.01, dt = 1.0/60.0, maxVal = 2.2;
+    int Nx = 300, Ny = 192, Nz = 128;
+    float dL = 0.005, dt = 1.0/60.0, maxVal = 2.2;
     float rho = 1.2, nu = 1.5e-5, Uin = 1.0;
 
-    vector<float> u, v, w, p;
-    vector<char> solid;
-    int U(int i, int j, int k) { return i + j*(Nx+1) + k*(Nx+1)*Ny; }
-    int V(int i, int j, int k) { return i + j*Nx + k*Nx*(Ny+1); }
-    int W(int i, int j, int k) { return i + j*Nx + k*Nx*Ny; }
-    int C(int i, int j, int k) { return i + j*Nx + k*Nx*Ny; }
-    ivec3 N(int c) { return ivec3(Nx + (c==0), Ny + (c==1), Nz + (c==2)); }
-    vec3 off(int c) { return vec3(c != 0, c != 1, c != 2) * 0.5f; }
-    vector<float>& F(int c) { return c == 0 ? u : c == 1 ? v : w; }
+    float *u, *v, *w, *p, *div, *f1, *f2, *lo, *hi, *res[3], *acc;
+    char* solid;
+    GPU int U(int i, int j, int k) const { return i + j*(Nx+1) + k*(Nx+1)*Ny; }
+    GPU int V(int i, int j, int k) const { return i + j*Nx + k*Nx*(Ny+1); }
+    GPU int W(int i, int j, int k) const { return i + j*Nx + k*Nx*Ny; }
+    GPU int C(int i, int j, int k) const { return i + j*Nx + k*Nx*Ny; }
+    GPU ivec3 N(int c) const { return ivec3(Nx + (c==0), Ny + (c==1), Nz + (c==2)); }
+    GPU int size(int c) const { ivec3 n = N(c); return n.x*n.y*n.z; }
+    GPU vec3 off(int c) const { return vec3(c == 0 ? 0 : 0.5f, c == 1 ? 0 : 0.5f, c == 2 ? 0 : 0.5f); }
+    GPU ivec3 at(int id, ivec3 n) const { return ivec3(id % n.x, id / n.x % n.y, id / (n.x*n.y)); }
+    float*& F(int c) { return c == 0 ? u : c == 1 ? v : w; }
+
+    // --- multigrid
+    struct Level { ivec3 n; float *x, *f, *r; char* solid; };
+    Level lv[8]; int nl = 0;
 
     Fluid() {
-        u.resize((Nx+1)*Ny*Nz, Uin);
-        v.resize(Nx*(Ny+1)*Nz, 0);
-        w.resize(Nx*Ny*(Nz+1), 0);
-        p.resize(Nx*Ny*Nz, 0);
-        solid.resize(Nx*Ny*Nz, 0);
-    }
+        int n = (Nx+1)*(Ny+1)*(Nz+1);
+        for (float** b : {&u, &v, &w, &p, &div, &f1, &f2, &lo, &hi, &res[0], &res[1], &res[2]}) *b = engine.alloc<float>(n);
+        acc = engine.alloc<float>(4);
+        solid = engine.alloc<char>(n);
+        for (int i = 0; i < size(0); i++) u[i] = Uin;
 
+        // --- multigrid ---
+        ivec3 m(Nx, Ny, Nz);
+        lv[nl++] = {m, p, div, engine.alloc<float>(n), solid};
+        while (m.x % 2 == 0 && m.y % 2 == 0 && m.z % 2 == 0 && std::min({m.x, m.y, m.z}) >= 8) {
+            m = ivec3(m.x/2, m.y/2, m.z/2);
+            int c = m.x*m.y*m.z;
+            lv[nl++] = {m, engine.alloc<float>(c), engine.alloc<float>(c), engine.alloc<float>(c), engine.alloc<char>(c)};
+        }
+    }
     // ---- drawing ----
     vec3 colorMap(float t) {
         float s1 = 0.35f, s2 = 0.55f, s3 = 0.6f, s4 = 0.8f;
@@ -131,6 +145,7 @@ struct Fluid {
         return mix(c4, c5, std::min((t-s3) / (s4-s3), 1.0f));
     }
     void draw(int k, int jy) {
+        engine.sync();
         vec3 a = -vec3(Nx, Ny, Nz) * dL / 2.0f, b = -a;
         auto cell = [&](int x, int y, int z) {
             vec3 s((u[U(x,y,z)] + u[U(x+1,y,z)]) / 2, (v[V(x,y,z)] + v[V(x,y+1,z)]) / 2, (w[W(x,y,z)] + w[W(x,y,z+1)]) / 2);
@@ -162,137 +177,189 @@ struct Fluid {
 
     // ---- moving the fluid ----
     void boundaries(vec3 c = vec3(0), vec3 omega = vec3(0)) {
-        for (int k = 0; k < Nz; k++) for (int j = 0; j < Ny; j++) {
+        engine.gpu(Ny*Nz, [=, *this] __device__ (int id) {
+            int j = id % Ny, k = id / Ny;
             u[U(0,j,k)]  = Uin;
             u[U(Nx,j,k)] = u[U(Nx-1,j,k)];
-        }
-        for (int k = 0; k < Nz; k++) for (int i = 0; i < Nx; i++) v[V(i,0,k)] = v[V(i,Ny,k)] = 0;
-        for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++) w[W(i,j,0)] = w[W(i,j,Nz)] = 0;
-        vec3 L = vec3(Nx, Ny, Nz) * dL;
-        for (int k = 0; k < Nz; k++) for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++) {
-            if (!solid[C(i,j,k)]) continue;
-            vec3 s = cross(omega, (vec3(i,j,k) + 0.5f) * dL - L/2.0f - c);
-            u[U(i,j,k)] = u[U(i+1,j,k)] = s.x;
-            v[V(i,j,k)] = v[V(i,j+1,k)] = s.y;
-            w[W(i,j,k)] = w[W(i,j,k+1)] = s.z;
-        }
+        });
+        engine.gpu(Nx*Nz, [=, *this] __device__ (int id) { int i = id % Nx, k = id / Nx; v[V(i,0,k)] = v[V(i,Ny,k)] = 0; });
+        engine.gpu(Nx*Ny, [=, *this] __device__ (int id) { int i = id % Nx, j = id / Nx; w[W(i,j,0)] = w[W(i,j,Nz)] = 0; });
+        engine.gpu(Nx*Ny*Nz, [=, *this] __device__ (int id) {
+            if (!solid[id]) return;
+            ivec3 q = at(id, ivec3(Nx, Ny, Nz));
+            vec3 s = cross(omega, (vec3(q) + 0.5f) * dL - vec3(Nx, Ny, Nz) * dL / 2.0f - c);
+            u[U(q.x,q.y,q.z)] = u[U(q.x+1,q.y,q.z)] = s.x;
+            v[V(q.x,q.y,q.z)] = v[V(q.x,q.y+1,q.z)] = s.y;
+            w[W(q.x,q.y,q.z)] = w[W(q.x,q.y,q.z+1)] = s.z;
+        });
     }
-    float sample(const vector<float>& f, ivec3 n, vec3 q, float* lo = nullptr, float* hi = nullptr) {
+    GPU float sample(const float* f, ivec3 n, vec3 q, float* l = nullptr, float* h = nullptr) const {
         q = clamp(q, vec3(0), vec3(n) - 1.001f);
         ivec3 a(q); vec3 t = q - vec3(a);
         float c[8];
         for (int m = 0; m < 8; m++) c[m] = f[(a.x + (m&1)) + (a.y + (m>>1&1))*n.x + (a.z + (m>>2))*n.x*n.y];
-        if (lo) { *lo = *std::min_element(c, c+8); *hi = *std::max_element(c, c+8); }
+        if (l) { *l = *h = c[0]; for (int m = 1; m < 8; m++) { *l = fminf(*l, c[m]); *h = fmaxf(*h, c[m]); } }
         return mix(mix(mix(c[0], c[1], t.x), mix(c[2], c[3], t.x), t.y),
                 mix(mix(c[4], c[5], t.x), mix(c[6], c[7], t.x), t.y), t.z);
     }
-    vec3 velAt(vec3 q) {
+    GPU vec3 velAt(vec3 q) const {
         return vec3(sample(u, N(0), q - off(0)), sample(v, N(1), q - off(1)), sample(w, N(2), q - off(2)));
     }
-    void trace(int c, const vector<float>& f, vector<float>& out, float s, vector<float>* lo = nullptr, vector<float>* hi = nullptr) {
-        ivec3 n = N(c);
-        #pragma omp parallel for
-        for (int k = 0; k < n.z; k++) for (int j = 0; j < n.y; j++) for (int i = 0; i < n.x; i++) {
-            int id = i + j*n.x + k*n.x*n.y;
-            vec3 q = vec3(i, j, k) + off(c);
+    void trace(int c, float* f, float* out, float s, bool limits = false) {
+        engine.gpu(size(c), [=, *this] __device__ (int id) {
+            vec3 q = vec3(at(id, N(c))) + off(c);
             vec3 a = velAt(q), m = velAt(q - a*s/2.0f);
-            out[id] = sample(f, n, q - m*s - off(c), lo ? &(*lo)[id] : nullptr, hi ? &(*hi)[id] : nullptr);
-        }
+            out[id] = sample(f, N(c), q - m*s - off(c), limits ? lo + id : nullptr, limits ? hi + id : nullptr);
+        });
     }
     void advect() {
         float s = dt / dL;
-        vector<float> res[3];
         for (int c = 0; c < 3; c++) {
-            const vector<float>& f = F(c);
-            vector<float> f1 = f, f2 = f, lo = f, hi = f;
-            trace(c, f, f1, s, &lo, &hi);
+            float *f = F(c), *r = res[c];
+            trace(c, f, f1, s, true);
             trace(c, f1, f2, -s);
-            for (size_t n = 0; n < f.size(); n++) {
-                float e = f1[n] + 0.5f*(f[n] - f2[n]);
-                f2[n] = (e < lo[n] || e > hi[n]) ? f1[n] : e;
-            }
-            res[c] = f2;
+            engine.gpu(size(c), [=, *this] __device__ (int id) {
+                float e = f1[id] + 0.5f*(f[id] - f2[id]);
+                r[id] = (e < lo[id] || e > hi[id]) ? f1[id] : e;
+            });
         }
-        u = res[0]; v = res[1]; w = res[2];
+        for (int c = 0; c < 3; c++) swap(F(c), res[c]);
+    }
+
+    // ---- pressure: multigrid ----
+    GPU float lap(Level L, ivec3 q, int id, int& cnt) const {
+        float sum = 0; cnt = 0;
+        for (int d = 0; d < 3; d++) for (int sg = -1; sg <= 1; sg += 2) {
+            ivec3 m = q; m[d] += sg;
+            if (m.x == L.n.x) { cnt++; continue; }
+            if (m[d] < 0 || m[d] >= L.n[d]) continue;
+            int mi = m.x + m.y*L.n.x + m.z*L.n.x*L.n.y;
+            if (!L.solid[mi]) { sum += L.x[mi]; cnt++; }
+        }
+        return sum - cnt*L.x[id];
+    }
+    void smooth(int l, int iters, float om) {
+        Level L = lv[l];
+        for (int it = 0; it < iters; it++) for (int color = 0; color < 2; color++)
+            engine.gpu(L.n.x*L.n.y*L.n.z, [=, *this] __device__ (int id) {
+                ivec3 q = at(id, L.n);
+                if ((q.x + q.y + q.z) % 2 != color || L.solid[id]) return;
+                int cnt; float r = lap(L, q, id, cnt) - L.f[id];
+                if (cnt) L.x[id] += om * r / cnt;
+            });
+    }
+    void residual(int l, bool check = false) {
+        Level L = lv[l];
+        engine.gpu(L.n.x*L.n.y*L.n.z, [=, *this] __device__ (int id) {
+            if (L.solid[id]) { L.r[id] = 0; return; }
+            int cnt; L.r[id] = L.f[id] - lap(L, at(id, L.n), id, cnt);
+            if (check && cnt) atomicMax((int*)acc, __float_as_int(fabsf(L.r[id])));
+        });
+    }
+    void vcycle(int l) {
+        if (l == nl-1) { smooth(l, 30, 1.5f); return; }
+        Level F = lv[l], C = lv[l+1];
+        smooth(l, 4, 1.15f);
+        residual(l);
+        engine.gpu(C.n.x*C.n.y*C.n.z, [=, *this] __device__ (int id) {
+            ivec3 q = at(id, C.n);
+            float sum = 0; bool all = true;
+            for (int m = 0; m < 8; m++) {
+                ivec3 c = q*2 + ivec3(m&1, m>>1&1, m>>2);
+                int fi = c.x + c.y*F.n.x + c.z*F.n.x*F.n.y;
+                sum += F.r[fi]; all = all && F.solid[fi];
+            }
+            C.solid[id] = all;
+            C.f[id] = all ? 0 : sum / 2;
+            C.x[id] = 0;
+        });
+        vcycle(l+1);
+        engine.gpu(F.n.x*F.n.y*F.n.z, [=, *this] __device__ (int id) {
+            if (F.solid[id]) return;
+            F.x[id] += sample(C.x, C.n, (vec3(at(id, F.n)) + 0.5f) / 2.0f - 0.5f);
+        });
+        smooth(l, 4, 1.15f);
     }
     void project() {
-        vector<float> div(Nx*Ny*Nz, 0);
-        #pragma omp parallel for
-        for (int k = 0; k < Nz; k++) for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++)
-            if (!solid[C(i,j,k)]) div[C(i,j,k)] = (u[U(i+1,j,k)] - u[U(i,j,k)] + v[V(i,j+1,k)] - v[V(i,j,k)]
-                                                + w[W(i,j,k+1)] - w[W(i,j,k)]) / dL;
-        float s = rho * dL*dL / dt, err = 0;
+        ivec3 n(Nx, Ny, Nz);
+        float s = rho * dL*dL / dt;
+        engine.gpu(Nx*Ny*Nz, [=, *this] __device__ (int id) {
+            ivec3 q = at(id, n);
+            div[id] = solid[id] ? 0 : s * (u[U(q.x+1,q.y,q.z)] - u[U(q.x,q.y,q.z)] + v[V(q.x,q.y+1,q.z)] - v[V(q.x,q.y,q.z)]
+                                        + w[W(q.x,q.y,q.z+1)] - w[W(q.x,q.y,q.z)]) / dL;
+        });
         int it = 0;
-        for (; it < 500; it++) {
-            err = 0;
-            for (int color = 0; color < 2; color++) {
-                #pragma omp parallel for reduction(max:err)
-                for (int k = 0; k < Nz; k++) for (int j = 0; j < Ny; j++) for (int i = (j + k + color) % 2; i < Nx; i += 2) {
-                    int c = C(i,j,k); if (solid[c]) continue;
-                    float sum = 0; int n = 0;
-                    int nb[6][3] = {{i-1,j,k}, {i+1,j,k}, {i,j-1,k}, {i,j+1,k}, {i,j,k-1}, {i,j,k+1}};
-                    for (auto& q : nb) {
-                        if (q[0] == Nx) { n++; continue; }
-                        if (q[0] < 0 || q[1] < 0 || q[1] >= Ny || q[2] < 0 || q[2] >= Nz) continue;
-                        int m = C(q[0], q[1], q[2]);
-                        if (!solid[m]) { sum += p[m]; n++; }
-                    }
-                    if (!n) continue;
-                    float r = sum - n*p[c] - s*div[c];
-                    err = std::max(err, abs(r));
-                    p[c] += 1.97f * r / n;
-                }
-            }
-            if (err / s * dt < 1e-4f) break;
+        for (; it < 15; it++) {
+            vcycle(0);
+            engine.gpu(1, [=, *this] __device__ (int) { *acc = 0; });
+            residual(0, true);
+            engine.sync();
+            if (*acc / s * dt < 1e-3f) break;
         }
         static int frame = 0;
-        if (frame++ % 60 == 0) cout << "pressure iters: " << it << "  err: " << err / s * dt << endl;
+        if (frame++ % 60 == 0) cout << "pressure cycles: " << it + 1 << "  err: " << *acc / s * dt << endl;
 
         float g = dt / (rho * dL);
-        #pragma omp parallel for
-        for (int k = 0; k < Nz; k++) for (int j = 0; j < Ny; j++) {
-            for (int i = 1; i < Nx; i++)
-                if (!solid[C(i,j,k)] && !solid[C(i-1,j,k)]) u[U(i,j,k)] -= g * (p[C(i,j,k)] - p[C(i-1,j,k)]);
-            if (!solid[C(Nx-1,j,k)]) u[U(Nx,j,k)] -= g * (0 - p[C(Nx-1,j,k)]);
-            for (int i = 0; i < Nx; i++) {
-                if (j > 0 && !solid[C(i,j,k)] && !solid[C(i,j-1,k)]) v[V(i,j,k)] -= g * (p[C(i,j,k)] - p[C(i,j-1,k)]);
-                if (k > 0 && !solid[C(i,j,k)] && !solid[C(i,j,k-1)]) w[W(i,j,k)] -= g * (p[C(i,j,k)] - p[C(i,j,k-1)]);
-            }
-        }
+        engine.gpu(size(0), [=, *this] __device__ (int id) {
+            ivec3 q = at(id, N(0));
+            if (q.x == 0) return;
+            if (q.x == Nx) { if (!solid[C(Nx-1,q.y,q.z)]) u[id] -= g * (0 - p[C(Nx-1,q.y,q.z)]); return; }
+            int a = C(q.x,q.y,q.z), b = C(q.x-1,q.y,q.z);
+            if (!solid[a] && !solid[b]) u[id] -= g * (p[a] - p[b]);
+        });
+        engine.gpu(size(1), [=, *this] __device__ (int id) {
+            ivec3 q = at(id, N(1));
+            if (q.y == 0 || q.y == Ny) return;
+            int a = C(q.x,q.y,q.z), b = C(q.x,q.y-1,q.z);
+            if (!solid[a] && !solid[b]) v[id] -= g * (p[a] - p[b]);
+        });
+        engine.gpu(size(2), [=, *this] __device__ (int id) {
+            ivec3 q = at(id, N(2));
+            if (q.z == 0 || q.z == Nz) return;
+            int a = C(q.x,q.y,q.z), b = C(q.x,q.y,q.z-1);
+            if (!solid[a] && !solid[b]) w[id] -= g * (p[a] - p[b]);
+        });
     }
+    
     void diffuse() {
         float a = nu * dt / (dL*dL);
         int iters = std::min(50, 2 + (int)(10*a));
         for (int c = 0; c < 3; c++) {
-            vector<float>& f = F(c); vector<float> f0 = f; ivec3 n = N(c);
-            for (int it = 0; it < iters; it++)
-                for (int k = 0; k < n.z; k++) for (int j = 0; j < n.y; j++) for (int i = 0; i < n.x; i++) {
-                    ivec3 q(i, j, k);
-                    if (q[c] == 0 || q[c] == n[c]-1) continue;
-                    int id = i + j*n.x + k*n.x*n.y; float sum = 0;
+            engine.copy(f1, F(c), size(c));
+            for (int it = 0; it < iters; it++) {
+                float *f = F(c), *g = f2;
+                engine.gpu(size(c), [=, *this] __device__ (int id) {
+                    ivec3 n = N(c), q = at(id, n);
+                    if (q[c] == 0 || q[c] == n[c]-1) { g[id] = f[id]; return; }
+                    float sum = 0;
                     for (int d = 0; d < 3; d++) for (int s = -1; s <= 1; s += 2) {
                         ivec3 m = q; m[d] += s;
                         sum += (m[d] < 0 || m[d] >= n[d]) ? f[id] : f[m.x + m.y*n.x + m.z*n.x*n.y];
                     }
-                    f[id] = (f0[id] + a*sum) / (1 + 6*a);
-                }
+                    g[id] = (f1[id] + a*sum) / (1 + 6*a);
+                });
+                swap(F(c), f2);
+            }
         }
     }
 
     vec3 drag() {
-        vec3 F(0); ivec3 n(Nx, Ny, Nz);
+        engine.sync();
+        acc[0] = acc[1] = acc[2] = 0;
         float A = dL*dL, mu = rho*nu;
-        for (int k = 0; k < Nz; k++) for (int j = 0; j < Ny; j++) for (int i = 0; i < Nx; i++) {
-            if (solid[C(i,j,k)]) continue;
-            vec3 uc((u[U(i,j,k)] + u[U(i+1,j,k)]) / 2, (v[V(i,j,k)] + v[V(i,j+1,k)]) / 2, (w[W(i,j,k)] + w[W(i,j,k+1)]) / 2);
+        engine.gpu(Nx*Ny*Nz, [=, *this] __device__ (int id) {
+            if (solid[id]) return;
+            ivec3 n(Nx, Ny, Nz), q = at(id, n);
+            vec3 uc((u[U(q.x,q.y,q.z)] + u[U(q.x+1,q.y,q.z)]) / 2, (v[V(q.x,q.y,q.z)] + v[V(q.x,q.y+1,q.z)]) / 2, (w[W(q.x,q.y,q.z)] + w[W(q.x,q.y,q.z+1)]) / 2);
             for (int d = 0; d < 3; d++) for (int s = -1; s <= 1; s += 2) {
-                ivec3 m(i, j, k); m[d] += s;
+                ivec3 m = q; m[d] += s;
                 if (m[d] < 0 || m[d] >= n[d] || !solid[C(m.x, m.y, m.z)]) continue;
-                F[d] += s * p[C(i,j,k)] * A;
-                for (int t = 0; t < 3; t++) if (t != d) F[t] += mu * uc[t] / (dL/2) * A;
+                atomicAdd(&acc[d], s * p[id] * A);
+                for (int t = 0; t < 3; t++) if (t != d) atomicAdd(&acc[t], mu * uc[t] / (dL/2) * A);
             }
-        }
-        return F;
+        });
+        engine.sync();
+        return vec3(acc[0], acc[1], acc[2]);
     }
 };
 Fluid fluid;
@@ -300,6 +367,7 @@ Fluid fluid;
 struct Object {
     vec3 pos; float r; vec3 omega = vec3(0);
     vector<vec3> tri;
+    GLuint list = 0;
 
     Object(vec3 pos, float r, const char* path) : pos(pos), r(r) {
         ifstream f(path, ios::binary);
@@ -358,15 +426,21 @@ struct Object {
         for (size_t i = 0; i < votes.size(); i++) f.solid[i] = votes[i] >= 2;
     }
     void draw() {
-        vec3 light = normalize(vec3(0.3, 1, 0.5));
-        glBegin(GL_TRIANGLES);
-        for (size_t t = 0; t < tri.size(); t += 3) {
-            vec3 n = normalize(cross(tri[t+1] - tri[t], tri[t+2] - tri[t]));
-            float b = 0.3f + 0.7f * std::max(0.0f, dot(n, light));
-            glColor3f(b, b, b);
-            for (int m = 0; m < 3; m++) { vec3 p = tri[t+m] + pos; glVertex3f(p.x, p.y, p.z); }
+        if (!list) {
+            list = glGenLists(1);
+            glNewList(list, GL_COMPILE);
+            vec3 light = normalize(vec3(0.3, 1, 0.5));
+            glBegin(GL_TRIANGLES);
+            for (size_t t = 0; t < tri.size(); t += 3) {
+                vec3 n = normalize(cross(tri[t+1] - tri[t], tri[t+2] - tri[t]));
+                float b = 0.3f + 0.7f * std::max(0.0f, dot(n, light));
+                glColor3f(b, b, b);
+                for (int m = 0; m < 3; m++) { vec3 p = tri[t+m] + pos; glVertex3f(p.x, p.y, p.z); }
+            }
+            glEnd();
+            glEndList();
         }
-        glEnd();
+        glCallList(list);
     }
 };
 Object model(vec3(-0.2, 0, 0), 0.5, "models/rb22.stl");
@@ -384,6 +458,9 @@ int main() {
         fluid.diffuse();
         fluid.boundaries(model.pos, model.omega);
         fluid.project();
+
+        static double t0 = glfwGetTime(); static int fr = 0;
+if (++fr % 60 == 0) { cout << "ms/frame: " << (glfwGetTime() - t0) * 1000 / 60 << endl; t0 = glfwGetTime(); }
 
         // static int f = 0;
         // if (f++ % 60 == 0) {
