@@ -6,7 +6,6 @@
 #include <cmath>
 #include <algorithm>
 #define STB_IMAGE_IMPLEMENTATION
-#include "stb_image.h"
 #include <fstream>
 #include "gpu.h"
 using namespace std;
@@ -99,6 +98,9 @@ struct Engine {
 Engine engine;
 
 struct Fluid {
+
+    bool ground = true;
+
     int Nx = 384, Ny = 192, Nz = 128;
     float dL = 0.005, dt = 1.0/60.0, maxVal = 2.2;
     float rho = 1.2, nu = 1.5e-5, Uin = 1.0;
@@ -144,27 +146,14 @@ struct Fluid {
         if (t < s3) return mix(c3, c4, (t-s2) / (s3-s2));
         return mix(c4, c5, std::min((t-s3) / (s4-s3), 1.0f));
     }
-    void draw(int k, int jy) {
-        engine.sync();
+    void draw() {
         vec3 a = -vec3(Nx, Ny, Nz) * dL / 2.0f, b = -a;
-        auto cell = [&](int x, int y, int z) {
-            vec3 s((u[U(x,y,z)] + u[U(x+1,y,z)]) / 2, (v[V(x,y,z)] + v[V(x,y+1,z)]) / 2, (w[W(x,y,z)] + w[W(x,y,z+1)]) / 2);
-            vec3 col = solid[C(x,y,z)] ? vec3(1) : colorMap(clamp(length(s) / (maxVal * Uin), 0.0f, 1.0f));
-            glColor3f(col.x, col.y, col.z);
-        };
-        glBegin(GL_QUADS);
-        for (int y = 0; y < Ny; y++) for (int x = 0; x < Nx; x++) {
-            cell(x, y, k);
-            float px = a.x + x*dL, py = a.y + y*dL, z = a.z + (k + 0.5f)*dL;
-            glVertex3f(px, py, z); glVertex3f(px+dL, py, z); glVertex3f(px+dL, py+dL, z); glVertex3f(px, py+dL, z);
+        if (ground) {
+            glColor3f(0.25f, 0.25f, 0.25f);
+            glBegin(GL_QUADS);
+            glVertex3f(a.x, a.y, a.z); glVertex3f(b.x, a.y, a.z); glVertex3f(b.x, a.y, b.z); glVertex3f(a.x, a.y, b.z);
+            glEnd();
         }
-        // for (int z = 0; z < Nz; z++) for (int x = 0; x < Nx; x++) {
-        //     cell(x, jy, z);
-        //     float px = a.x + x*dL, pz = a.z + z*dL, y = a.y + (jy + 0.5f)*dL;
-        //     glVertex3f(px, y, pz); glVertex3f(px+dL, y, pz); glVertex3f(px+dL, y, pz+dL); glVertex3f(px, y, pz+dL);
-        // }
-        glEnd();
-
         glColor3f(1, 1, 1);
         glBegin(GL_LINES);
         for (int m = 0; m < 8; m++) for (int d = 0; d < 3; d++) if (!(m >> d & 1)) {
@@ -346,7 +335,8 @@ struct Fluid {
                     float sum = 0;
                     for (int d = 0; d < 3; d++) for (int s = -1; s <= 1; s += 2) {
                         ivec3 m = q; m[d] += s;
-                        sum += (m[d] < 0 || m[d] >= n[d]) ? f[id] : f[m.x + m.y*n.x + m.z*n.x*n.y];
+                        if (m[d] < 0 || m[d] >= n[d]) sum += (ground && d == 1 && m.y < 0) ? (c == 0 ? 2*Uin : 0) - f[id] : f[id];
+                        else sum += f[m.x + m.y*n.x + m.z*n.x*n.y];
                     }
                     g[id] = (f1[id] + a*sum) / (1 + 6*a);
                 });
@@ -381,6 +371,7 @@ struct Object {
     vector<vec3> tri;
     GLuint list = 0;
     vector<vec3> col;
+    float bottom = 0.0f;
 
     Object(vec3 pos, float r, const char* path) : pos(pos), r(r) {
         ifstream f(path, ios::binary);
@@ -401,6 +392,7 @@ struct Object {
         float s = 2*r / std::max({e.x, e.y, e.z});
         for (auto& p : tri) p = (p - c) * s;
         cout << n << " triangles" << endl;
+        for (auto& p : tri) bottom = std::min(bottom, p.y);
     }
 
     void paint(Fluid& f) {
@@ -478,11 +470,12 @@ struct Object {
         glCallList(list);
     }
 };
-Object model(vec3(0.0, 0, 0), 0.75, "models/rb22.stl");
+Object model(vec3(0.0, 0.0f, 0.0f), 0.75, "models/rb22.stl");
 
 
 int main() {
     cout << "Re = " << fluid.Uin * 2*model.r / fluid.nu << endl;
+    if (fluid.ground) model.pos.y = -fluid.Ny * fluid.dL / 2 - model.bottom;
     model.block(fluid);
     while (!glfwWindowShouldClose(engine.window)) {
         engine.run();
@@ -494,23 +487,10 @@ int main() {
         fluid.boundaries(model.pos, model.omega);
         fluid.project();
 
+        // --- draw ---
         static int pf = 0;
         if (pf++ % 30 == 0) model.paint(fluid);
-
-        static double t0 = glfwGetTime(); static int fr = 0;
-        if (++fr % 60 == 0) { cout << "ms/frame: " << (glfwGetTime() - t0) * 1000 / 60 << endl; t0 = glfwGetTime(); }
-
-        // static int f = 0;
-        // if (f++ % 60 == 0) {
-        //     vec3 F = fluid.drag();
-        //     cout << "Cd = " << F.x / (0.5f * fluid.rho * fluid.Uin*fluid.Uin * M_PI * sphere.r*sphere.r) << endl;
-        // }
-
-        // --- draw ---
-        static int k = fluid.Nz / 2, j = fluid.Ny / 2;
-        // k = engine.slice(k, fluid.Nz, GLFW_KEY_UP, GLFW_KEY_DOWN);
-        // j = engine.slice(j, fluid.Ny, GLFW_KEY_RIGHT, GLFW_KEY_LEFT);
-        // fluid.draw(k, j);
+        fluid.draw();
         model.draw();
     }
     glfwTerminate();
