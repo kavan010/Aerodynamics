@@ -18,6 +18,7 @@ struct Engine {
     double prev = 0.0;
     float yaw = 0.5f, pitch = 0.3f, dist = 2.0f;
     double mx = 0, my = 0;
+    vec3 target = vec3(0);
 
     Engine() {
         // wake up glfw
@@ -52,18 +53,28 @@ struct Engine {
         glfwPollEvents();
         glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+        // middle drag: orbit, shift + middle drag: pan
         double x, y; glfwGetCursorPos(window, &x, &y);
+        float dx = x - mx, dy = y - my;
         if (glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_MIDDLE) == GLFW_PRESS) {
-            yaw -= (x - mx) * 0.005;
-            pitch = clamp(pitch + float(y - my) * 0.005f, -1.5f, 1.5f);
+            if (glfwGetKey(window, GLFW_KEY_LEFT_SHIFT) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_RIGHT_SHIFT) == GLFW_PRESS) {
+                vec3 r(cos(yaw), 0, -sin(yaw)), up(-sin(pitch)*sin(yaw), cos(pitch), -sin(pitch)*cos(yaw));
+                target += (up*dy - r*dx) * 0.0015f * dist;
+            } else {
+                yaw -= dx * 0.005f;
+                pitch = clamp(pitch + dy * 0.005f, -1.5f, 1.5f);
+            }
         }
         mx = x; my = y;
+
         glMatrixMode(GL_PROJECTION);
         glLoadIdentity();
         gluPerspective(45, (double)WIDTH / HEIGHT, 0.01, 100);
         glMatrixMode(GL_MODELVIEW);
         glLoadIdentity();
-        gluLookAt(dist*cos(pitch)*sin(yaw), dist*sin(pitch), dist*cos(pitch)*cos(yaw), 0, 0, 0, 0, 1, 0);
+        vec3 e = target + vec3(cos(pitch)*sin(yaw), sin(pitch), cos(pitch)*cos(yaw)) * dist;
+        gluLookAt(e.x, e.y, e.z, target.x, target.y, target.z, 0, 1, 0);
 
         double now = glfwGetTime();
         float dt = (float)(now - prev);
@@ -99,7 +110,7 @@ Engine engine;
 
 struct Fluid {
 
-    bool ground = true;
+    bool ground = false;
 
     int Nx = 384, Ny = 192, Nz = 128;
     float dL = 0.005, dt = 1.0/60.0, maxVal = 2.2;
@@ -138,13 +149,13 @@ struct Fluid {
         }
     }
     // ---- drawing ----
-    vec3 colorMap(float t) {
+    GPU vec3 colorMap(float t) const {
         float s1 = 0.35f, s2 = 0.55f, s3 = 0.6f, s4 = 0.8f;
         vec3 c1(0,0,0), c2(0,0,1), c3(0,1,0), c4(1,1,0), c5(1,0,0);
         if (t < s1) return mix(c1, c2, t / s1);
         if (t < s2) return mix(c2, c3, (t-s1) / (s2-s1));
         if (t < s3) return mix(c3, c4, (t-s2) / (s3-s2));
-        return mix(c4, c5, std::min((t-s3) / (s4-s3), 1.0f));
+        return mix(c4, c5, fminf((t-s3) / (s4-s3), 1.0f));
     }
     void draw() {
         vec3 a = -vec3(Nx, Ny, Nz) * dL / 2.0f, b = -a;
@@ -366,6 +377,110 @@ struct Fluid {
 };
 Fluid fluid;
 
+struct Vortices {
+    int maxT = 1000000, nv = 0, gap = 0;
+    float level = 80.0f;
+    float *q, *t, *s, *buf; int* cnt; GLuint vbo = 0;
+
+    Vortices() {
+        int n = fluid.Nx*fluid.Ny*fluid.Nz;
+        q = engine.alloc<float>(n); t = engine.alloc<float>(n); s = engine.alloc<float>(n);
+        buf = engine.alloc<float>(maxT * 18); cnt = engine.alloc<int>(1);
+    }
+    void build(Fluid f, float lref) {
+        ivec3 n(f.Nx, f.Ny, f.Nz), m = n - 1;
+        float qs = lref*lref / (f.Uin*f.Uin * f.dL*f.dL);
+        engine.gpu(n.x*n.y*n.z, [=, *this] __device__ (int id) {
+            vec3 p = vec3(f.at(id, n)) + 0.5f, g[3];
+            for (int b = 0; b < 3; b++) { vec3 e(0); e[b] = 1; g[b] = (f.velAt(p + e) - f.velAt(p - e)) / 2.0f; }
+            float S2 = 0, W2 = 0;
+            for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) {
+                float sa = (g[b][a] + g[a][b]) / 2, wa = (g[b][a] - g[a][b]) / 2;
+                S2 += sa*sa; W2 += wa*wa;
+            }
+            ivec3 c0 = f.at(id, n); bool near = false;
+            for (int dz = -gap; dz <= gap; dz++) for (int dy = -gap; dy <= gap; dy++) for (int dx = -gap; dx <= gap; dx++) {
+                ivec3 c = clamp(c0 + ivec3(dx, dy, dz), ivec3(0), n - 1);
+                near |= f.solid[c.x + c.y*n.x + c.z*n.x*n.y];
+            }
+            q[id] = near ? 0 : 0.5f * (W2 - S2) * qs;
+            s[id] = length(f.velAt(p));
+        });
+        engine.gpu(n.x*n.y*n.z, [=, *this] __device__ (int id) {
+            ivec3 c0 = f.at(id, n); float sum = 0;
+            for (int dz = -1; dz <= 1; dz++) for (int dy = -1; dy <= 1; dy++) for (int dx = -1; dx <= 1; dx++) {
+                ivec3 c = clamp(c0 + ivec3(dx, dy, dz), ivec3(0), n - 1);
+                sum += q[c.x + c.y*n.x + c.z*n.x*n.y];
+            }
+            t[id] = sum / 27;
+        });
+        engine.sync();
+        *cnt = 0;
+        vec3 o = -vec3(n) * f.dL / 2.0f + f.dL / 2, light = normalize(vec3(0.3, 1, 0.5));
+        engine.gpu(m.x*m.y*m.z, [=, *this] __device__ (int id) {
+            ivec3 c = f.at(id, m);
+            float v[8], sp[8]; vec3 p[8], gq[8];
+            auto Q = [&](ivec3 a) { a = clamp(a, ivec3(0), n - 1); return t[a.x + a.y*n.x + a.z*n.x*n.y]; };
+            for (int i = 0; i < 8; i++) {
+                ivec3 d = c + ivec3(i&1, i>>1&1, i>>2);
+                int k = d.x + d.y*n.x + d.z*n.x*n.y;
+                v[i] = t[k]; sp[i] = s[k]; p[i] = o + vec3(d) * f.dL;
+                gq[i] = vec3(Q(d + ivec3(1,0,0)) - Q(d - ivec3(1,0,0)), Q(d + ivec3(0,1,0)) - Q(d - ivec3(0,1,0)), Q(d + ivec3(0,0,1)) - Q(d - ivec3(0,0,1)));
+            }
+            const int T[6][4] = {{0,7,1,3}, {0,7,3,2}, {0,7,2,6}, {0,7,6,4}, {0,7,4,5}, {0,7,5,1}};
+            for (int t = 0; t < 6; t++) {
+                int in[4], out[4], ni = 0, no = 0;
+                for (int j = 0; j < 4; j++) { int k = T[t][j]; if (v[k] > level) in[ni++] = k; else out[no++] = k; }
+                if (ni == 0 || ni == 4) continue;
+                vec3 P[4], G[4]; float V[4]; int e[4][2], ne;
+                if (ni == 1 || ni == 3) {
+                    int a = ni == 1 ? in[0] : out[0], *bs = ni == 1 ? out : in;
+                    for (int j = 0; j < 3; j++) { e[j][0] = a; e[j][1] = bs[j]; }
+                    ne = 3;
+                } else {
+                    int q4[4][2] = {{in[0], out[0]}, {in[0], out[1]}, {in[1], out[1]}, {in[1], out[0]}};
+                    for (int j = 0; j < 4; j++) { e[j][0] = q4[j][0]; e[j][1] = q4[j][1]; }
+                    ne = 4;
+                }
+                for (int j = 0; j < ne; j++) {
+                    int a = e[j][0], b = e[j][1];
+                    float w = (level - v[a]) / (v[b] - v[a]);
+                                        P[j] = mix(p[a], p[b], w); V[j] = mix(sp[a], sp[b], w); G[j] = mix(gq[a], gq[b], w);
+                }
+                int nt = ne - 2, slot = atomicAdd(cnt, nt);
+                if (slot + nt > maxT) continue;
+                for (int tr = 0; tr < nt; tr++) {
+                    int ix[3] = {0, 1 + tr, 2 + tr};
+                    for (int j = 0; j < 3; j++) {
+                        float* x = buf + ((slot + tr) * 3 + j) * 6;
+                        float l = length(G[ix[j]]), br = l > 0 ? 0.25f + 0.75f * fabsf(dot(G[ix[j]] / l, light)) : 1;
+                        vec3 col = f.colorMap(V[ix[j]] / (2 * f.Uin)) * br;
+                        x[0] = P[ix[j]].x; x[1] = P[ix[j]].y; x[2] = P[ix[j]].z;
+                        x[3] = col.x; x[4] = col.y; x[5] = col.z;
+                    }
+                }
+            }
+        });
+        engine.sync();
+        nv = std::min(*cnt, maxT) * 3;
+        if (!vbo) glGenBuffers(1, &vbo);
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glBufferData(GL_ARRAY_BUFFER, nv * 6 * sizeof(float), buf, GL_DYNAMIC_DRAW);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+    void draw() {
+        if (!nv) return;
+        glBindBuffer(GL_ARRAY_BUFFER, vbo);
+        glEnableClientState(GL_VERTEX_ARRAY); glEnableClientState(GL_COLOR_ARRAY);
+        glVertexPointer(3, GL_FLOAT, 24, (void*)0);
+        glColorPointer(3, GL_FLOAT, 24, (void*)12);
+        glDrawArrays(GL_TRIANGLES, 0, nv);
+        glDisableClientState(GL_VERTEX_ARRAY); glDisableClientState(GL_COLOR_ARRAY);
+        glBindBuffer(GL_ARRAY_BUFFER, 0);
+    }
+};
+Vortices vort;
+
 struct Object {
     vec3 pos; float r; vec3 omega = vec3(0);
     vector<vec3> tri;
@@ -384,7 +499,7 @@ struct Object {
             for (int m = 0; m < 3; m++) tri[t*3+m] = vec3(d[3+3*m], d[5+3*m], -d[4+3*m]);
         }
         vec3 lo(1e30f), hi(-1e30f);
-        float a = 3 * M_PI/2;
+        float a =  M_PI/2;
         for (auto& p : tri) p = vec3(cos(a)*p.x + sin(a)*p.z, p.y, -sin(a)*p.x + cos(a)*p.z);
 
         for (auto& p : tri) { lo = min(lo, p); hi = max(hi, p); }
@@ -470,12 +585,13 @@ struct Object {
         glCallList(list);
     }
 };
-Object model(vec3(0.0, 0.0f, 0.0f), 0.75, "models/rb22.stl");
+Object model(vec3(0.0, 0.0f, 0.0f), 0.8, "models/f16.stl");
 
 
 int main() {
     cout << "Re = " << fluid.Uin * 2*model.r / fluid.nu << endl;
-    if (fluid.ground) model.pos.y = -fluid.Ny * fluid.dL / 2 - model.bottom;
+    if (fluid.ground) {model.pos.y = -fluid.Ny * fluid.dL / 2 - model.bottom;
+        engine.target = vec3(0, -fluid.Ny * fluid.dL / 2, 0);}
     model.block(fluid);
     while (!glfwWindowShouldClose(engine.window)) {
         engine.run();
@@ -490,8 +606,13 @@ int main() {
         // --- draw ---
         static int pf = 0;
         if (pf++ % 30 == 0) model.paint(fluid);
+        // if (glfwGetKey(engine.window, GLFW_KEY_UP) == GLFW_PRESS) vort.level *= 1.03f;
+        // if (glfwGetKey(engine.window, GLFW_KEY_DOWN) == GLFW_PRESS) vort.level /= 1.03f;
+        static int vf = 0;
+        if (vf++ % 30 == 0) { vort.build(fluid, 2*model.r); cout << "tris " << *vort.cnt << " level " << vort.level << endl; }
         fluid.draw();
         model.draw();
+        vort.draw();
     }
     glfwTerminate();
     return 0;
