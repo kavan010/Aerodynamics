@@ -99,7 +99,7 @@ struct Engine {
 Engine engine;
 
 struct Fluid {
-    int Nx = 300, Ny = 192, Nz = 128;
+    int Nx = 384, Ny = 192, Nz = 128;
     float dL = 0.005, dt = 1.0/60.0, maxVal = 2.2;
     float rho = 1.2, nu = 1.5e-5, Uin = 1.0;
 
@@ -320,10 +320,20 @@ struct Fluid {
             if (!solid[a] && !solid[b]) w[id] -= g * (p[a] - p[b]);
         });
     }
-    
+        
     void diffuse() {
-        float a = nu * dt / (dL*dL);
-        int iters = std::min(50, 2 + (int)(10*a));
+        float* nt = lo;
+        engine.gpu(Nx*Ny*Nz, [=, *this] __device__ (int id) {
+            ivec3 q = at(id, ivec3(Nx, Ny, Nz));
+            nt[id] = 0;
+            if (solid[id] || q.x < 1 || q.y < 1 || q.z < 1 || q.x > Nx-2 || q.y > Ny-2 || q.z > Nz-2) return;
+            vec3 c = vec3(q) + 0.5f, g[3];
+            for (int b = 0; b < 3; b++) { vec3 e(0); e[b] = 1; g[b] = (velAt(c + e) - velAt(c - e)) / 2.0f; }
+            float S2 = 0;
+            for (int a = 0; a < 3; a++) for (int b = 0; b < 3; b++) { float s = (g[b][a] + g[a][b]) / 2; S2 += s*s; }
+            nt[id] = 0.17f*0.17f * dL * sqrtf(2*S2);
+        });
+        int iters = std::min(50, 4 + (int)(10 * nu * dt / (dL*dL)));
         for (int c = 0; c < 3; c++) {
             engine.copy(f1, F(c), size(c));
             for (int it = 0; it < iters; it++) {
@@ -331,6 +341,8 @@ struct Fluid {
                 engine.gpu(size(c), [=, *this] __device__ (int id) {
                     ivec3 n = N(c), q = at(id, n);
                     if (q[c] == 0 || q[c] == n[c]-1) { g[id] = f[id]; return; }
+                    ivec3 b = q; b[c] -= 1;
+                    float a = (nu + (nt[C(q.x,q.y,q.z)] + nt[C(b.x,b.y,b.z)]) / 2) * dt / (dL*dL);
                     float sum = 0;
                     for (int d = 0; d < 3; d++) for (int s = -1; s <= 1; s += 2) {
                         ivec3 m = q; m[d] += s;
@@ -443,7 +455,7 @@ struct Object {
         glCallList(list);
     }
 };
-Object model(vec3(-0.2, 0, 0), 0.5, "models/rb22.stl");
+Object model(vec3(0.0, 0, 0), 0.5, "models/rb22.stl");
 
 
 int main() {
