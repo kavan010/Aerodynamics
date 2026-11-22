@@ -380,6 +380,7 @@ struct Object {
     vec3 pos; float r; vec3 omega = vec3(0);
     vector<vec3> tri;
     GLuint list = 0;
+    vector<vec3> col;
 
     Object(vec3 pos, float r, const char* path) : pos(pos), r(r) {
         ifstream f(path, ios::binary);
@@ -402,6 +403,27 @@ struct Object {
         cout << n << " triangles" << endl;
     }
 
+    void paint(Fluid& f) {
+        engine.sync();
+        vec3 L = vec3(f.Nx, f.Ny, f.Nz) * f.dL;
+        float pref = f.p[f.C(1, f.Ny/2, f.Nz/2)], q = 0.5f * f.rho * f.Uin * f.Uin;
+        col.assign(tri.size() / 3, vec3(0.6f));
+        for (size_t t = 0; t < tri.size(); t += 3) {
+            vec3 c = (tri[t] + tri[t+1] + tri[t+2]) / 3.0f + pos, n = cross(tri[t+1] - tri[t], tri[t+2] - tri[t]);
+            if (length(n) < 1e-12f) continue;
+            n = normalize(n);
+            bool done = false;
+            for (int d = 1; d <= 3 && !done; d++) for (int s = -1; s <= 1 && !done; s += 2) {
+                ivec3 g((c + n * (s * d * f.dL) + L/2.0f) / f.dL);
+                if (g.x < 0 || g.y < 0 || g.z < 0 || g.x >= f.Nx || g.y >= f.Ny || g.z >= f.Nz || f.solid[f.C(g.x, g.y, g.z)]) continue;
+                float cp = (f.p[f.C(g.x, g.y, g.z)] - pref) / q;
+                col[t/3] = f.colorMap(clamp((cp + 1.5f) / 2.5f, 0.0f, 1.0f));
+                done = true;
+            }
+        }
+        if (list) glDeleteLists(list, 1);
+        list = 0;
+    }
     void block(Fluid& f) {
         ivec3 n(f.Nx, f.Ny, f.Nz);
         vec3 L = vec3(n) * f.dL;
@@ -446,7 +468,8 @@ struct Object {
             for (size_t t = 0; t < tri.size(); t += 3) {
                 vec3 n = normalize(cross(tri[t+1] - tri[t], tri[t+2] - tri[t]));
                 float b = 0.3f + 0.7f * std::max(0.0f, dot(n, light));
-                glColor3f(b, b, b);
+                vec3 k = col.empty() ? vec3(1) : col[t/3];
+                glColor3f(k.x * b, k.y * b, k.z * b);
                 for (int m = 0; m < 3; m++) { vec3 p = tri[t+m] + pos; glVertex3f(p.x, p.y, p.z); }
             }
             glEnd();
@@ -455,7 +478,7 @@ struct Object {
         glCallList(list);
     }
 };
-Object model(vec3(0.0, 0, 0), 0.5, "models/rb22.stl");
+Object model(vec3(0.0, 0, 0), 0.75, "models/rb22.stl");
 
 
 int main() {
@@ -471,8 +494,11 @@ int main() {
         fluid.boundaries(model.pos, model.omega);
         fluid.project();
 
+        static int pf = 0;
+        if (pf++ % 30 == 0) model.paint(fluid);
+
         static double t0 = glfwGetTime(); static int fr = 0;
-if (++fr % 60 == 0) { cout << "ms/frame: " << (glfwGetTime() - t0) * 1000 / 60 << endl; t0 = glfwGetTime(); }
+        if (++fr % 60 == 0) { cout << "ms/frame: " << (glfwGetTime() - t0) * 1000 / 60 << endl; t0 = glfwGetTime(); }
 
         // static int f = 0;
         // if (f++ % 60 == 0) {
@@ -482,9 +508,9 @@ if (++fr % 60 == 0) { cout << "ms/frame: " << (glfwGetTime() - t0) * 1000 / 60 <
 
         // --- draw ---
         static int k = fluid.Nz / 2, j = fluid.Ny / 2;
-        k = engine.slice(k, fluid.Nz, GLFW_KEY_UP, GLFW_KEY_DOWN);
-        j = engine.slice(j, fluid.Ny, GLFW_KEY_RIGHT, GLFW_KEY_LEFT);
-        fluid.draw(k, j);
+        // k = engine.slice(k, fluid.Nz, GLFW_KEY_UP, GLFW_KEY_DOWN);
+        // j = engine.slice(j, fluid.Ny, GLFW_KEY_RIGHT, GLFW_KEY_LEFT);
+        // fluid.draw(k, j);
         model.draw();
     }
     glfwTerminate();
